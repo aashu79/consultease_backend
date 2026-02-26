@@ -1,0 +1,669 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum ConsultancyStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+enum UserStatus {
+  PENDING_VERIFICATION
+  ACTIVE
+  INVITED
+  SUSPENDED
+}
+
+enum OtpChannel {
+  EMAIL
+  SMS
+}
+
+enum OtpPurpose {
+  VERIFY_EMAIL
+  VERIFY_PHONE
+  RESET_PASSWORD
+  INVITE_ACCEPT
+}
+
+enum RateLimitType {
+  OTP_REQUEST
+  OTP_VERIFY
+  LOGIN_ATTEMPT
+}
+
+enum LeadStage {
+  NEW
+  CONTACTED
+  COUNSELING
+  FOLLOW_UP
+  QUALIFIED
+  CONVERTED
+  LOST
+}
+
+enum LeadStatus {
+  OPEN
+  WON
+  LOST
+}
+
+enum StudentStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum StudentCaseStatus {
+  ACTIVE
+  APPLIED
+  OFFER_RECEIVED
+  VISA_FILED
+  VISA_GRANTED
+  CLOSED
+  DROPPED
+}
+
+enum DocumentRequestStatus {
+  OPEN
+  SUBMITTED
+  PARTIALLY_SUBMITTED
+  FULFILLED
+  CANCELLED
+}
+
+enum StorageProvider {
+  MINIO
+  AWS_S3
+}
+
+enum DocumentUploadState {
+  UPLOADING
+  CONFIRMED
+  FAILED
+}
+
+enum DocumentVerificationStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+enum NotificationChannel {
+  EMAIL
+  SMS
+}
+
+enum NotificationStatus {
+  SENT
+  FAILED
+}
+
+model Permission {
+  id          String           @id @default(uuid()) @db.Uuid
+  key         String           @unique
+  module      String
+  description String
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  rolePermissions RolePermission[]
+}
+
+model Consultancy {
+  id        String            @id @default(uuid()) @db.Uuid
+  name      String
+  slug      String            @unique
+  country   String
+  timezone  String
+  email     String
+  phone     String
+  address   String?
+  website   String?
+  status    ConsultancyStatus @default(ACTIVE)
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+
+  users               User[]
+  authIdentities      AuthIdentity[]
+  authCredentials     AuthCredential[]
+  authSessions        AuthSession[]
+  authOtps            AuthOtp[]
+  rateLimitEvents     RateLimitEvent[]
+  roles               Role[]
+  userRoles           UserRole[]
+  invitations         Invitation[]
+  invitationRoles     InvitationRole[]
+  leads               Lead[]
+  leadActivities      LeadActivity[]
+  followUpTasks       FollowUpTask[]
+  students            Student[]
+  studentAssignments  StudentAssignment[]
+  educationRecords    EducationRecord[]
+  testScores          TestScore[]
+  studentCases        StudentCase[]
+  caseProgramChoices  CaseProgramChoice[]
+  documentTypes       DocumentType[]
+  documentRequests    DocumentRequest[]
+  documentFiles       DocumentFile[]
+  documentVersions    DocumentVersion[]
+  documentVerifications DocumentVerification[]
+  notificationLogs    NotificationLog[]
+  auditLogs           AuditLog[]
+}
+
+model User {
+  id             String     @id @default(uuid()) @db.Uuid
+  consultancyId  String     @db.Uuid
+  name           String
+  email          String
+  phone          String?
+  profileImageObjectKey String?
+  profileImageMimeType  String?
+  profileImageSizeBytes BigInt?
+  profileImageUpdatedAt DateTime?
+  status         UserStatus @default(PENDING_VERIFICATION)
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+  deletedAt      DateTime?
+
+  consultancy        Consultancy       @relation(fields: [consultancyId], references: [id], onDelete: Restrict)
+  authIdentity       AuthIdentity?
+  authCredential     AuthCredential?
+  sessions           AuthSession[]
+  userRoles          UserRole[]
+  invitationsSent    Invitation[]      @relation("InvitationCreatedBy")
+  assignedLeads      Lead[]            @relation("LeadAssignedTo")
+  leadActivities     LeadActivity[]
+  followUpTasks      FollowUpTask[]    @relation("TaskAssignedTo")
+  requestedDocuments DocumentRequest[] @relation("RequestedBy")
+  uploadedDocuments  DocumentVersion[] @relation("DocumentUploadedByUser")
+  verifications      DocumentVerification[]
+  auditLogs          AuditLog[]
+
+  @@unique([consultancyId, email])
+  @@unique([consultancyId, phone])
+  @@index([consultancyId])
+  @@index([status])
+}
+
+model AuthIdentity {
+  userId          String    @id @db.Uuid
+  consultancyId   String    @db.Uuid
+  email           String
+  phone           String?
+  emailVerifiedAt DateTime?
+  phoneVerifiedAt DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  user        User        @relation(fields: [userId], references: [id], onDelete: Restrict)
+  consultancy Consultancy @relation(fields: [consultancyId], references: [id], onDelete: Restrict)
+
+  @@index([consultancyId])
+}
+
+model AuthCredential {
+  userId            String   @id @db.Uuid
+  consultancyId     String   @db.Uuid
+  passwordHash      String
+  passwordUpdatedAt DateTime @default(now())
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  user        User        @relation(fields: [userId], references: [id], onDelete: Restrict)
+  consultancy Consultancy @relation(fields: [consultancyId], references: [id], onDelete: Restrict)
+
+  @@index([consultancyId])
+}
+
+model AuthSession {
+  id               String    @id @default(uuid()) @db.Uuid
+  consultancyId    String    @db.Uuid
+  userId           String    @db.Uuid
+  refreshTokenHash String
+  deviceId         String?
+  ip               String?
+  userAgent        String?
+  createdAt        DateTime  @default(now())
+  lastUsedAt       DateTime  @default(now())
+  revokedAt        DateTime?
+
+  user        User        @relation(fields: [userId], references: [id], onDelete: Restrict)
+  consultancy Consultancy @relation(fields: [consultancyId], references: [id], onDelete: Restrict)
+
+  @@index([consultancyId])
+  @@index([userId])
+  @@index([revokedAt])
+}
+
+model AuthOtp {
+  id            String      @id @default(uuid()) @db.Uuid
+  consultancyId String      @db.Uuid
+  userId        String?     @db.Uuid
+  channel       OtpChannel
+  purpose       OtpPurpose
+  destination   String
+  otpHash       String
+  expiresAt     DateTime
+  attempts      Int         @default(0)
+  maxAttempts   Int         @default(5)
+  usedAt        DateTime?
+  createdAt     DateTime    @default(now())
+  requestIp     String?
+  userAgent     String?
+
+  consultancy Consultancy @relation(fields: [consultancyId], references: [id], onDelete: Restrict)
+
+  @@index([consultancyId, destination, purpose, createdAt])
+  @@index([expiresAt])
+}
+
+model RateLimitEvent {
+  id            String        @id @default(uuid()) @db.Uuid
+  consultancyId String        @db.Uuid
+  type          RateLimitType
+  destination   String?
+  ip            String?
+  createdAt     DateTime      @default(now())
+
+  consultancy Consultancy @relation(fields: [consultancyId], references: [id], onDelete: Restrict)
+
+  @@index([consultancyId, type, destination, createdAt])
+  @@index([consultancyId, type, ip, createdAt])
+}
+
+model Role {
+  id            String   @id @default(uuid()) @db.Uuid
+  consultancyId String   @db.Uuid
+  name          String
+  key           String
+  isSystem      Boolean  @default(false)
+  createdAt     DateTime @default(now())
+
+  consultancy     Consultancy      @relation(fields: [consultancyId], references: [id], onDelete: Restrict)
+  rolePermissions RolePermission[]
+  userRoles       UserRole[]
+  invitationRoles InvitationRole[]
+
+  @@unique([consultancyId, key])
+  @@index([consultancyId])
+}
+
+model RolePermission {
+  roleId       String  @db.Uuid
+  permissionId String  @db.Uuid
+  allowed      Boolean @default(true)
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Restrict)
+
+  @@id([roleId, permissionId])
+}
+
+model UserRole {
+  consultancyId String @db.Uuid
+  userId        String @db.Uuid
+  roleId        String @db.Uuid
+
+  consultancy Consultancy @relation(fields: [consultancyId], references: [id], onDelete: Restrict)
+  user        User        @relation(fields: [userId], references: [id], onDelete: Restrict)
+  role        Role        @relation(fields: [roleId], references: [id], onDelete: Restrict)
+
+  @@id([userId, roleId])
+  @@index([consultancyId])
+}
+
+model Invitation {
+  id            String    @id @default(uuid()) @db.Uuid
+  consultancyId String    @db.Uuid
+  createdByUserId String? @db.Uuid
+  email         String?
+  phone         String?
+  tokenHash     String
+  expiresAt     DateTime
+  acceptedAt    DateTime?
+  createdAt     DateTime  @default(now())
+
+  consultancy Consultancy     @relation(fields: [consultancyId], references: [id], onDelete: Restrict)
+  createdBy   User?           @relation("InvitationCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  roles       InvitationRole[]
+
+  @@index([consultancyId])
+}
+
+model InvitationRole {
+  consultancyId String @db.Uuid
+  invitationId  String @db.Uuid
+  roleId        String @db.Uuid
+
+  consultancy Consultancy @relation(fields: [consultancyId], references: [id], onDelete: Restrict)
+  invitation  Invitation  @relation(fields: [invitationId], references: [id], onDelete: Restrict)
+  role        Role        @relation(fields: [roleId], references: [id], onDelete: Restrict)
+
+  @@id([invitationId, roleId])
+  @@index([consultancyId])
+}
+
+model Lead {
+  id               String    @id @default(uuid()) @db.Uuid
+  consultancyId    String    @db.Uuid
+  assignedToUserId String?   @db.Uuid
+  fullName         String
+  email            String?
+  phone            String?
+  source           String?
+  stage            LeadStage @default(NEW)
+  status           LeadStatus @default(OPEN)
+  notes            String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  consultancy Consultancy    @relation(fields: [consultancyId], references: [id], onDelete: Restrict)
+  assignedTo  User?          @relation("LeadAssignedTo", fields: [assignedToUserId], references: [id], onDelete: SetNull)
+  activities  LeadActivity[]
+  followUps   FollowUpTask[]
+
+  @@index([consultancyId])
+  @@index([stage])
+  @@index([assignedToUserId])
+}
+
+model LeadActivity {
+  id            String   @id @default(uuid()) @db.Uuid
+  consultancyId String   @db.Uuid
+  leadId        String   @db.Uuid
+  actorUserId   String?  @db.Uuid
+  type          String
+  note          String?
+  createdAt     DateTime @default(now())
+
+  consultancy Consultancy @relation(fields: [consultancyId], references: [id], onDelete: Restrict)
+  lead        Lead        @relation(fields: [leadId], references: [id], onDelete: Restrict)
+  actor       User?       @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([consultancyId, leadId, createdAt])
+}
+
+model FollowUpTask {
+  id            String   @id @default(uuid()) @db.Uuid
+  consultancyId String   @db.Uuid
+  leadId        String?  @db.Uuid
+  studentId     String?  @db.Uuid
+  assignedToUserId String? @db.Uuid
+  title         String
+  dueAt         DateTime?
+  status        String
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  consultancy Consultancy @relation(fields: [consultancyId], references: [id], onDelete: Restrict)
+  lead        Lead?       @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  student     Student?    @relation(fields: [studentId], references: [id], onDelete: SetNull)
+  assignedTo  User?       @relation("TaskAssignedTo", fields: [assignedToUserId], references: [id], onDelete: SetNull)
+
+  @@index([consultancyId])
+}
+
+model Student {
+  id             String       @id @default(uuid()) @db.Uuid
+  consultancyId  String       @db.Uuid
+  fullName       String
+  dob            DateTime?
+  gender         String?
+  email          String?
+  phone          String?
+  profileImageObjectKey String?
+  profileImageMimeType  String?
+  profileImageSizeBytes BigInt?
+  profileImageUpdatedAt DateTime?
+  address        String?
+  passportNo     String?
+  passportExpiry DateTime?
+  nationality    String?
+  status         StudentStatus @default(ACTIVE)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  consultancy       Consultancy         @relation(fields: [consultancyId], references: [id], onDelete: Restrict)
+  assignments       StudentAssignment[]
+  educationRecords  EducationRecord[]
+  testScores        TestScore[]
+  cases             StudentCase[]
+  followUps         FollowUpTask[]
+  documentRequests  DocumentRequest[]
+  documentFiles     DocumentFile[]
+  uploadedDocuments DocumentVersion[]   @relation("DocumentUploadedByStudent")
+
+  @@index([consultancyId])
+  @@index([email])
+  @@index([phone])
+}
+
+model StudentAssignment {
+  id             String  @id @default(uuid()) @db.Uuid
+  consultancyId  String  @db.Uuid
+  studentId      String  @db.Uuid
+  counselorId    String? @db.Uuid
+  docOfficerId   String? @db.Uuid
+  visaOfficerId  String? @db.Uuid
+  updatedAt      DateTime @updatedAt
+
+  consultancy Consultancy @relation(fields: [consultancyId], references: [id], onDelete: Restrict)
+  student     Student     @relation(fields: [studentId], references: [id], onDelete: Restrict)
+
+  @@unique([consultancyId, studentId])
+  @@index([consultancyId])
+}
+
+model EducationRecord {
+  id            String   @id @default(uuid()) @db.Uuid
+  consultancyId String   @db.Uuid
+  studentId     String   @db.Uuid
+  level         String
+  institution   String
+  board         String?
+  score         String?
+  year          Int?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  consultancy Consultancy @relation(fields: [consultancyId], references: [id], onDelete: Restrict)
+  student     Student     @relation(fields: [studentId], references: [id], onDelete: Restrict)
+
+  @@index([consultancyId, studentId])
+}
+
+model TestScore {
+  id            String   @id @default(uuid()) @db.Uuid
+  consultancyId String   @db.Uuid
+  studentId     String   @db.Uuid
+  testName      String
+  score         String
+  testDate      DateTime?
+  createdAt     DateTime @default(now())
+
+  consultancy Consultancy @relation(fields: [consultancyId], references: [id], onDelete: Restrict)
+  student     Student     @relation(fields: [studentId], references: [id], onDelete: Restrict)
+
+  @@index([consultancyId, studentId])
+}
+
+model StudentCase {
+  id            String            @id @default(uuid()) @db.Uuid
+  consultancyId String            @db.Uuid
+  studentId     String            @db.Uuid
+  intake        String
+  targetCountry String
+  status        StudentCaseStatus @default(ACTIVE)
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  consultancy Consultancy         @relation(fields: [consultancyId], references: [id], onDelete: Restrict)
+  student     Student             @relation(fields: [studentId], references: [id], onDelete: Restrict)
+  programChoices CaseProgramChoice[]
+  documentRequests DocumentRequest[]
+
+  @@index([consultancyId, studentId])
+}
+
+model CaseProgramChoice {
+  id            String   @id @default(uuid()) @db.Uuid
+  consultancyId String   @db.Uuid
+  caseId        String   @db.Uuid
+  university    String
+  program       String
+  priority      Int?
+  status        String?
+  createdAt     DateTime @default(now())
+
+  consultancy Consultancy @relation(fields: [consultancyId], references: [id], onDelete: Restrict)
+  studentCase StudentCase @relation(fields: [caseId], references: [id], onDelete: Restrict)
+
+  @@index([consultancyId, caseId])
+}
+
+model DocumentType {
+  id            String   @id @default(uuid()) @db.Uuid
+  consultancyId String   @db.Uuid
+  key           String
+  label         String
+  description   String?
+  isRequired    Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  consultancy Consultancy @relation(fields: [consultancyId], references: [id], onDelete: Restrict)
+
+  @@unique([consultancyId, key])
+  @@index([consultancyId])
+}
+
+model DocumentRequest {
+  id               String                @id @default(uuid()) @db.Uuid
+  consultancyId    String                @db.Uuid
+  studentId        String                @db.Uuid
+  caseId           String?               @db.Uuid
+  requestedByUserId String               @db.Uuid
+  title            String
+  documentTypeKey  String
+  instructions     String?
+  dueAt            DateTime?
+  status           DocumentRequestStatus @default(OPEN)
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+
+  consultancy Consultancy   @relation(fields: [consultancyId], references: [id], onDelete: Restrict)
+  student     Student       @relation(fields: [studentId], references: [id], onDelete: Restrict)
+  studentCase StudentCase?  @relation(fields: [caseId], references: [id], onDelete: SetNull)
+  requestedBy User          @relation("RequestedBy", fields: [requestedByUserId], references: [id], onDelete: Restrict)
+  versions    DocumentVersion[]
+
+  @@index([consultancyId, studentId, status])
+}
+
+model DocumentFile {
+  id              String   @id @default(uuid()) @db.Uuid
+  consultancyId   String   @db.Uuid
+  studentId       String   @db.Uuid
+  documentTypeKey String
+  currentVersionId String? @db.Uuid
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  consultancy Consultancy @relation(fields: [consultancyId], references: [id], onDelete: Restrict)
+  student     Student     @relation(fields: [studentId], references: [id], onDelete: Restrict)
+  versions    DocumentVersion[] @relation("DocumentFileVersions")
+  currentVersion DocumentVersion? @relation("CurrentDocumentVersion", fields: [currentVersionId], references: [id], onDelete: SetNull)
+
+  @@unique([consultancyId, studentId, documentTypeKey])
+  @@index([consultancyId, studentId])
+}
+
+model DocumentVersion {
+  id                 String             @id @default(uuid()) @db.Uuid
+  consultancyId      String             @db.Uuid
+  documentFileId     String             @db.Uuid
+  uploadedByUserId   String?            @db.Uuid
+  uploadedByStudentId String?           @db.Uuid
+  requestId          String?            @db.Uuid
+  versionNumber      Int
+  fileName           String
+  mimeType           String
+  sizeBytes          BigInt
+  storageProvider    StorageProvider
+  bucket             String
+  objectKey          String
+  checksumSha256     String?
+  uploadState        DocumentUploadState @default(UPLOADING)
+  createdAt          DateTime           @default(now())
+
+  consultancy Consultancy @relation(fields: [consultancyId], references: [id], onDelete: Restrict)
+  documentFile DocumentFile @relation("DocumentFileVersions", fields: [documentFileId], references: [id], onDelete: Restrict)
+  uploadedByUser User? @relation("DocumentUploadedByUser", fields: [uploadedByUserId], references: [id], onDelete: SetNull)
+  uploadedByStudent Student? @relation("DocumentUploadedByStudent", fields: [uploadedByStudentId], references: [id], onDelete: SetNull)
+  request     DocumentRequest? @relation(fields: [requestId], references: [id], onDelete: SetNull)
+  verifications DocumentVerification[]
+  usedAsCurrentIn DocumentFile[] @relation("CurrentDocumentVersion")
+
+  @@unique([documentFileId, versionNumber])
+  @@index([consultancyId])
+  @@index([documentFileId])
+  @@index([versionNumber])
+}
+
+model DocumentVerification {
+  id                String                     @id @default(uuid()) @db.Uuid
+  consultancyId     String                     @db.Uuid
+  documentVersionId String                     @db.Uuid
+  verifiedByUserId  String                     @db.Uuid
+  status            DocumentVerificationStatus @default(PENDING)
+  reason            String?
+  createdAt         DateTime                   @default(now())
+
+  consultancy Consultancy @relation(fields: [consultancyId], references: [id], onDelete: Restrict)
+  documentVersion DocumentVersion @relation(fields: [documentVersionId], references: [id], onDelete: Restrict)
+  verifiedBy User @relation(fields: [verifiedByUserId], references: [id], onDelete: Restrict)
+
+  @@index([consultancyId, documentVersionId, createdAt])
+}
+
+model NotificationLog {
+  id               String             @id @default(uuid()) @db.Uuid
+  consultancyId    String             @db.Uuid
+  channel          NotificationChannel
+  destination      String
+  templateKey      String
+  providerResponse Json?
+  status           NotificationStatus
+  createdAt        DateTime           @default(now())
+
+  consultancy Consultancy @relation(fields: [consultancyId], references: [id], onDelete: Restrict)
+
+  @@index([consultancyId, channel, createdAt])
+}
+
+model AuditLog {
+  id            String   @id @default(uuid()) @db.Uuid
+  consultancyId String   @db.Uuid
+  actorUserId   String?  @db.Uuid
+  action        String
+  entityType    String
+  entityId      String?
+  meta          Json?
+  ip            String?
+  userAgent     String?
+  createdAt     DateTime @default(now())
+
+  consultancy Consultancy @relation(fields: [consultancyId], references: [id], onDelete: Restrict)
+  actor      User?       @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([consultancyId])
+  @@index([createdAt])
+  @@index([actorUserId])
+  @@index([action])
+}
