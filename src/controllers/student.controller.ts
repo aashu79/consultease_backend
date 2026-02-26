@@ -169,4 +169,36 @@ export class StudentController {
     );
     return successResponse(res, data);
   }
+
+  static async getPortalAccount(req: Request, res: Response) {
+    const data = await StudentService.getPortalAccount(
+      req.tenant!.consultancyId,
+      req.params.id,
+    );
+    return successResponse(res, data);
+  }
+
+  static async createPortalAccount(req: Request, res: Response) {
+    const data = await StudentService.createPortalAccount(
+      req.tenant!.consultancyId,
+      req.tenant!.slug,
+      req.params.id,
+      req.body,
+      req.user!.userId,
+      { ip: req.ip, userAgent: req.get("user-agent"), requestId: req.requestId },
+    );
+    return successResponse(res, data, 201);
+  }
+
+  static async updatePortalAccount(req: Request, res: Response) {
+    const data = await StudentService.updatePortalAccount(
+      req.tenant!.consultancyId,
+      req.tenant!.slug,
+      req.params.id,
+      req.body,
+      req.user!.userId,
+      { ip: req.ip, userAgent: req.get("user-agent"), requestId: req.requestId },
+    );
+    return successResponse(res, data);
+  }
 }

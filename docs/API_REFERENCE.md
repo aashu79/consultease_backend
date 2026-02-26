@@ -1,52 +1,75 @@
-﻿# Consultease API Reference (v1)
+# Consultease API Reference (v1)
 
 ## Base URL
 
-- `{{API_BASE_URL}}/v1`
+`{{API_BASE_URL}}/v1`
 
-## Common Conventions
+## Standard Response Envelope
 
-- Success envelope:
-
-```json
-{ "success": true, "data": {}, "requestId": "uuid" }
-```
-
-- Error envelope:
+Success:
 
 ```json
 {
-  "success": false,
-  "error": { "code": "ERROR_CODE", "message": "Message", "details": {} },
+  "success": true,
+  "data": {},
   "requestId": "uuid"
 }
 ```
 
-- Auth header (protected routes): `Authorization: Bearer <accessToken>`
-- Consultancy header (consultancy-scoped protected routes): `X-Consultancy-Slug: <slug>`
-- Access token expiry: 15m
-- Refresh token expiry: 30d (rotation enabled)
+Error:
 
-## Global Error Codes
+```json
+{
+  "success": false,
+  "error": {
+    "code": "ERROR_CODE",
+    "message": "Human readable message",
+    "details": {}
+  },
+  "requestId": "uuid"
+}
+```
+
+## Auth, Tenant, and Headers
+
+- Bearer token header for protected APIs: `Authorization: Bearer <accessToken>`
+- Tenant header for tenant-scoped APIs: `X-Consultancy-Slug: <slug>`
+- `X-Tenant-Slug` is also accepted by tenant resolver.
+- Auth module endpoints can resolve consultancy from:
+  - body: `consultancySlug` or `tenantSlug`
+  - header: `X-Consultancy-Slug` or `X-Tenant-Slug`
+
+## Important Rules
+
+- All tenant-scoped data is isolated by `consultancyId`.
+- Password policy:
+  - minimum 8 chars
+  - at least 1 uppercase, 1 lowercase, 1 number, 1 special character
+- OTP is 6 digits and expires in 10 minutes.
+- Signed URL expiry defaults to 1200s; max 3600s.
+
+## Common Error Codes
 
 - `VALIDATION_ERROR`
 - `UNAUTHORIZED`
 - `FORBIDDEN`
-- `CONSULTANCY_NOT_FOUND`
 - `CONSULTANCY_HEADER_MISSING`
+- `CONSULTANCY_NOT_FOUND`
+- `CONSULTANCY_INACTIVE`
 - `CONSULTANCY_MISMATCH`
+- `USER_INACTIVE`
+- `PHONE_ALREADY_IN_USE`
 - `RATE_LIMITED`
 - `INTERNAL_SERVER_ERROR`
 - `NOT_FOUND`
 
 ---
 
-## Consultancy Module
+## 1) Tenant Module
 
-### POST `/consultancies/register`
+### POST `/tenants/register` (alias: `/consultancies/register`)
 
 - Auth: No
-- Headers: none
 - Body:
 
 ```json
@@ -54,240 +77,247 @@
   "name": "Acme Consultancy",
   "country": "Nepal",
   "timezone": "Asia/Kathmandu",
-  "email": "hello@acme.com",
-  "phone": "+97798XXXXXXXX",
+  "email": "info@acme.test",
+  "phone": "+9779800000000",
   "address": "Kathmandu",
-  "website": "https://acme.com",
+  "website": "https://acme.test",
   "ownerName": "Owner Name",
-  "ownerEmail": "owner@acme.com",
-  "ownerPhone": "+97798XXXXXXXX",
+  "ownerEmail": "owner@acme.test",
+  "ownerPhone": "+9779811111111",
   "ownerPassword": "StrongP@ss123"
 }
 ```
 
-- Notes:
-  - `slug` is generated automatically from consultancy `name` on the server.
-- Response `201`:
+- Success `201` (`data`):
 
 ```json
 {
-  "success": true,
-  "data": {
-    "consultancyId": "uuid",
-    "ownerUserId": "uuid",
-    "slug": "acme-consultancy"
-  },
-  "requestId": "uuid"
+  "consultancyId": "uuid",
+  "ownerUserId": "uuid",
+  "slug": "acme-consultancy"
 }
 ```
 
-- Errors: `VALIDATION_ERROR`
+- `website` accepts either full URL (`https://example.com`) or domain (`example.com` / `www.example.com`); backend normalizes domain-only values to `https://...`.
 
-### GET `/consultancies/me`
+- Module errors:
+  - `VALIDATION_ERROR`
+  - `CONSULTANCY_NOT_FOUND` (rare, post-create checks)
+
+### GET `/tenants/me` (alias: `/consultancies/me`)
 
 - Auth: Yes
 - Headers: `Authorization`, `X-Consultancy-Slug`
 - Permission: `consultancy.read`
-- Response `200`: consultancy profile
-- Errors: `UNAUTHORIZED`, `FORBIDDEN`, `CONSULTANCY_NOT_FOUND`
+- Success `200`: consultancy profile object
+- Module errors:
+  - `UNAUTHORIZED`
+  - `FORBIDDEN`
+  - `CONSULTANCY_NOT_FOUND`
 
 ---
 
-## Auth + OTP Module
+## 2) Auth Module
 
 ### POST `/auth/request-otp`
 
-- Auth: No (or optional)
-- Headers (optional): `X-Consultancy-Slug`
+- Auth: Optional
 - Body:
 
 ```json
 {
   "consultancySlug": "acme-consultancy",
-  "destination": "owner@acme.com",
+  "destination": "owner@acme.test",
   "channel": "EMAIL",
   "purpose": "VERIFY_EMAIL"
 }
 ```
 
-- Notes:
-  - `consultancySlug` is optional.
-  - If omitted, backend tries to infer consultancy from destination.
-  - If destination exists in multiple consultancies, backend returns `CONSULTANCY_CONTEXT_REQUIRED`.
-- Response `200`: `{ "success": true, "data": { "success": true, "consultancySlug": "acme-consultancy" } }`
-- Errors: `RATE_LIMITED`, `CONSULTANCY_NOT_FOUND`, `VALIDATION_ERROR`
+- `consultancySlug` optional. If omitted, backend attempts inference from destination.
+- Success `200` (`data`):
+
+```json
+{
+  "success": true,
+  "consultancySlug": "acme-consultancy"
+}
+```
+
+- Module errors:
+  - `RATE_LIMITED`
+  - `CONSULTANCY_CONTEXT_REQUIRED`
+  - `CONSULTANCY_NOT_FOUND`
 
 ### POST `/auth/verify-otp`
 
 - Auth: No
-- Headers (optional): `X-Consultancy-Slug`
 - Body:
 
 ```json
 {
   "consultancySlug": "acme-consultancy",
-  "destination": "owner@acme.com",
+  "destination": "owner@acme.test",
   "channel": "EMAIL",
   "purpose": "VERIFY_EMAIL",
   "otp": "123456"
 }
 ```
 
-- Response `200`:
+- Success `200` (`data`):
 
 ```json
 {
-  "success": true,
-  "data": { "verified": true, "consultancySlug": "acme-consultancy" },
-  "requestId": "uuid"
+  "verified": true,
+  "consultancySlug": "acme-consultancy"
 }
 ```
 
-- Errors: `OTP_INVALID`, `OTP_ATTEMPTS_EXCEEDED`, `CONSULTANCY_NOT_FOUND`
+- Module errors:
+  - `OTP_INVALID`
+  - `OTP_ATTEMPTS_EXCEEDED`
+  - `CONSULTANCY_CONTEXT_REQUIRED`
+  - `CONSULTANCY_NOT_FOUND`
 
 ### POST `/auth/login`
 
 - Auth: No
-- Headers (optional): `X-Consultancy-Slug`
-- Body:
-
-```json
-{
-  "email": "owner@acme.com",
-  "password": "StrongP@ss123",
-  "deviceId": "browser-01"
-}
-```
-
-- Notes:
-  - `consultancySlug` is optional for login.
-  - If the same email exists in multiple consultancies, pass `consultancySlug`.
-- Response `200`:
-
-```json
-{
-  "success": true,
-  "data": {
-    "accessToken": "jwt",
-    "refreshToken": "jwt",
-    "consultancySlug": "acme-consultancy",
-    "user": {
-      "id": "uuid",
-      "name": "Owner Name",
-      "email": "owner@acme.com",
-      "status": "ACTIVE",
-      "roles": [{ "id": "uuid", "key": "SUPER_ADMIN", "name": "Super Admin" }],
-      "permissions": ["*"]
-    }
-  },
-  "requestId": "uuid"
-}
-```
-
-- Errors: `INVALID_CREDENTIALS`, `EMAIL_NOT_VERIFIED`, `USER_INACTIVE`, `RATE_LIMITED`, `CONSULTANCY_CONTEXT_REQUIRED`
-
-### POST `/auth/refresh`
-
-- Body: `{ "refreshToken": "jwt" }`
-- Response `200`: new access + rotated refresh token + `consultancySlug`
-- Errors: `INVALID_REFRESH`
-
-### POST `/auth/logout`
-
-- Body: `{ "refreshToken": "jwt" }`
-- Response `200`: `{ "success": true }`
-
-### POST `/auth/forgot-password/request`
-
-- Headers (optional): `X-Consultancy-Slug`
-- Body:
-
-```json
-{ "consultancySlug": "acme-consultancy", "email": "user@acme.com" }
-```
-
-- Response `200`: generic success
-
-### POST `/auth/forgot-password/confirm`
-
-- Headers (optional): `X-Consultancy-Slug`
 - Body:
 
 ```json
 {
   "consultancySlug": "acme-consultancy",
-  "email": "user@acme.com",
+  "email": "owner@acme.test",
+  "password": "StrongP@ss123",
+  "deviceId": "browser-1"
+}
+```
+
+- `consultancySlug` optional unless same email exists in multiple consultancies.
+- Success `200` (`data`):
+
+```json
+{
+  "accessToken": "jwt",
+  "refreshToken": "jwt",
+  "consultancySlug": "acme-consultancy",
+  "user": {
+    "id": "uuid",
+    "name": "Owner Name",
+    "email": "owner@acme.test",
+    "phone": "+9779811111111",
+    "status": "ACTIVE",
+    "roles": [{ "id": "uuid", "key": "SUPER_ADMIN", "name": "Super Admin" }],
+    "permissions": ["tenant.read", "user.create"],
+    "emailVerified": true,
+    "phoneVerified": false
+  }
+}
+```
+
+- Module errors:
+  - `INVALID_CREDENTIALS`
+  - `EMAIL_NOT_VERIFIED`
+  - `USER_INACTIVE`
+  - `CONSULTANCY_CONTEXT_REQUIRED`
+  - `CONSULTANCY_NOT_FOUND`
+
+### POST `/auth/refresh`
+
+- Auth: No
+- Body:
+
+```json
+{
+  "refreshToken": "jwt"
+}
+```
+
+- Success `200` (`data`):
+
+```json
+{
+  "accessToken": "jwt",
+  "refreshToken": "jwt",
+  "consultancySlug": "acme-consultancy"
+}
+```
+
+- Module errors:
+  - `INVALID_REFRESH`
+  - `CONSULTANCY_NOT_FOUND`
+
+### POST `/auth/logout`
+
+- Auth: No
+- Body:
+
+```json
+{
+  "refreshToken": "jwt"
+}
+```
+
+- Success `200` (`data`):
+
+```json
+{
+  "success": true
+}
+```
+
+- Module errors:
+  - `INVALID_REFRESH`
+
+### POST `/auth/forgot-password/request`
+
+- Auth: No
+- Body:
+
+```json
+{
+  "consultancySlug": "acme-consultancy",
+  "email": "user@acme.test"
+}
+```
+
+- Success `200` (`data`):
+
+```json
+{
+  "success": true
+}
+```
+
+### POST `/auth/forgot-password/confirm`
+
+- Auth: No
+- Body:
+
+```json
+{
+  "consultancySlug": "acme-consultancy",
+  "email": "user@acme.test",
   "otp": "123456",
   "newPassword": "NewStrongP@ss123"
 }
 ```
 
-- Response `200`: generic success
+- Success `200` (`data`):
+
+```json
+{
+  "success": true
+}
+```
+
+- Module errors:
+  - `OTP_INVALID`
+  - `OTP_ATTEMPTS_EXCEEDED`
+  - `CONSULTANCY_NOT_FOUND`
 
 ---
 
-## Marketing Module (Super Admin Only)
-
-### POST `/marketing/email`
-
-- Auth: Yes
-- Headers: `Authorization`, `X-Consultancy-Slug`
-- Access: `SUPER_ADMIN` role required
-- Body:
-
-```json
-{
-  "subject": "Spring Offer",
-  "message": "Apply before deadline and get counseling discount.",
-  "recipients": ["lead1@example.com", "lead2@example.com"],
-  "includeUsers": false,
-  "includeStudents": true,
-  "includeLeads": true
-}
-```
-
-- Notes:
-  - `recipients` is optional.
-  - If include flags are true, recipients are collected from tenant directory and deduplicated.
-  - Max 1000 recipients per request.
-- Response `200`:
-
-```json
-{
-  "success": true,
-  "data": {
-    "subject": "Spring Offer",
-    "totalRecipients": 120,
-    "sent": 117,
-    "failed": 3,
-    "failures": [{ "destination": "x@example.com", "error": "..." }]
-  },
-  "requestId": "uuid"
-}
-```
-
-### POST `/marketing/sms`
-
-- Auth: Yes
-- Headers: `Authorization`, `X-Consultancy-Slug`
-- Access: `SUPER_ADMIN` role required
-- Body:
-
-```json
-{
-  "message": "New intake open now. Contact us today.",
-  "recipients": ["+97798XXXXXXXX"],
-  "includeUsers": false,
-  "includeStudents": true,
-  "includeLeads": true
-}
-```
-
-- Response `200`: `{ totalRecipients, sent, failed, failures[] }`
-
----
-
-## Users + Invitations + RBAC Module
+## 3) Users and Invitations Module
 
 ### POST `/users/invite`
 
@@ -298,14 +328,23 @@
 
 ```json
 {
-  "email": "staff@acme.com",
-  "phone": "+97798XXXXXXXX",
+  "email": "staff@acme.test",
+  "phone": "+9779812345678",
   "roleKeys": ["COUNSELOR"]
 }
 ```
 
-- Response `201`: `{ "invitationId": "uuid" }`
-- Errors: `INVALID_ROLE_KEYS`, `INVALID_INVITATION`
+- Success `201` (`data`):
+
+```json
+{
+  "invitationId": "uuid"
+}
+```
+
+- Module errors:
+  - `INVALID_INVITATION`
+  - `INVALID_ROLE_KEYS`
 
 ### POST `/invitations/accept`
 
@@ -315,45 +354,117 @@
 ```json
 {
   "consultancySlug": "acme-consultancy",
-  "token": "invite-token",
-  "name": "Staff",
+  "token": "invitation-token",
+  "name": "Staff Name",
   "password": "StrongP@ss123"
 }
 ```
 
-- Response `201`: `{ "userId": "uuid" }`
-- Errors: `INVITATION_INVALID`, `USER_EXISTS`, `CONSULTANCY_NOT_FOUND`
+- Success `201` (`data`):
+
+```json
+{
+  "userId": "uuid"
+}
+```
+
+- Module errors:
+  - `VALIDATION_ERROR`
+  - `INVITATION_INVALID`
+  - `USER_EXISTS`
+  - `CONSULTANCY_NOT_FOUND`
 
 ### GET `/users`
 
+- Auth: Yes
 - Permission: `user.read`
-- Response: users with roles and verification flags
+- Success `200`: array of users with roles and verification info
 
 ### PATCH `/users/:id`
 
+- Auth: Yes
 - Permission: `user.update`
-- Body (partial): `{ "name": "Updated", "phone": "+977...", "status": "SUSPENDED" }`
+- Body (partial):
+
+```json
+{
+  "name": "Updated Name",
+  "phone": "+9779812345678",
+  "status": "SUSPENDED"
+}
+```
+
+- Success `200` (`data`):
+
+```json
+{
+  "userId": "uuid"
+}
+```
+
+- Module errors:
+  - `USER_NOT_FOUND`
 
 ### POST `/users/:id/roles`
 
+- Auth: Yes
 - Permission: `role.assign`
-- Body: `{ "roleKeys": ["VISA_OFFICER", "DOCUMENTATION_OFFICER"] }`
+- Body:
+
+```json
+{
+  "roleKeys": ["VISA_OFFICER", "DOCUMENTATION_OFFICER"]
+}
+```
+
+- Success `200`: updated roles for user
+- Module errors:
+  - `INVALID_ROLE_KEYS`
+
+---
+
+## 4) RBAC Module
 
 ### POST `/roles`
 
+- Auth: Yes
 - Permission: `role.create`
-- Body: `{ "key": "CUSTOM_ROLE", "name": "Custom Role" }`
+- Body:
+
+```json
+{
+  "key": "CUSTOM_ROLE",
+  "name": "Custom Role"
+}
+```
+
+- Success `201`: role object
 
 ### GET `/roles`
 
+- Auth: Yes
 - Permission: `role.read`
+- Success `200`: role list
 
 ### PATCH `/roles/:id`
 
+- Auth: Yes
 - Permission: `role.update`
+- Body (partial):
+
+```json
+{
+  "name": "Senior Counselor"
+}
+```
+
+- Success `200`: updated role
+- Module errors:
+  - `ROLE_NOT_FOUND`
 
 ### POST `/roles/:id/permissions`
 
+- Auth: Yes
 - Permission: `permission.manage`
 - Body:
 
@@ -366,85 +477,237 @@
 }
 ```
 
+- Success `200`: updated role-permission matrix
+- Module errors:
+  - `ROLE_NOT_FOUND`
+
 ---
 
-## Leads Module
+## 5) Marketing Module (Super Admin Only)
+
+### POST `/marketing/email`
+
+- Auth: Yes
+- Headers: `Authorization`, `X-Consultancy-Slug`
+- Guard: Super Admin role required
+- Body:
+
+```json
+{
+  "subject": "Spring Intake Offer",
+  "message": "Apply now and get priority counseling.",
+  "recipients": ["a@example.com", "b@example.com"],
+  "includeUsers": false,
+  "includeStudents": true,
+  "includeLeads": true
+}
+```
+
+- Success `200` (`data`):
+
+```json
+{
+  "subject": "Spring Intake Offer",
+  "totalRecipients": 120,
+  "sent": 117,
+  "failed": 3,
+  "failures": [{ "destination": "a@example.com", "error": "..." }]
+}
+```
+
+- Module errors:
+  - `NO_RECIPIENTS`
+  - `RECIPIENT_LIMIT_EXCEEDED`
+
+### POST `/marketing/sms`
+
+- Auth: Yes
+- Guard: Super Admin role required
+- Body:
+
+```json
+{
+  "message": "New intake open now.",
+  "recipients": ["+9779800000001"],
+  "includeUsers": false,
+  "includeStudents": true,
+  "includeLeads": true
+}
+```
+
+- Success `200` (`data`):
+
+```json
+{
+  "totalRecipients": 200,
+  "sent": 190,
+  "failed": 10,
+  "failures": [{ "destination": "+9779800000001", "error": "..." }]
+}
+```
+
+---
+
+## 6) Leads Module
 
 ### POST `/leads`
 
+- Auth: Yes
 - Permission: `lead.create`
-- Body: `{ "fullName": "Lead Name", "email": "lead@mail.com", "phone": "+977...", "source": "facebook" }`
+- Body:
+
+```json
+{
+  "fullName": "Lead Name",
+  "email": "lead@sample.test",
+  "phone": "+9779800000011",
+  "source": "facebook",
+  "assignedToUserId": "uuid",
+  "notes": "Interested in Australia"
+}
+```
+
+- Success `201`: lead object
 
 ### GET `/leads`
 
+- Auth: Yes
 - Permission: `lead.read`
-- Query: `stage`, `assignedTo`, `search`, `page`, `limit`
+- Query params:
+  - `stage` (`NEW|CONTACTED|COUNSELING|FOLLOW_UP|QUALIFIED|CONVERTED|LOST`)
+  - `assignedTo` (userId)
+  - `search`
+  - `page`
+  - `limit`
+- Success `200`: paginated leads
 
 ### PATCH `/leads/:id`
 
+- Auth: Yes
 - Permission: `lead.update`
+- Body: partial lead fields + `stage` + `status`
+- Success `200`: `{ "leadId": "uuid" }`
+- Module errors:
+  - `LEAD_NOT_FOUND`
 
 ### POST `/leads/:id/activities`
 
+- Auth: Yes
 - Permission: `lead.update`
-- Body: `{ "type": "CALL", "note": "Interested" }`
+- Body:
+
+```json
+{
+  "type": "CALL",
+  "note": "Discussed test requirements"
+}
+```
+
+- Success `201`: activity object
+- Module errors:
+  - `LEAD_NOT_FOUND`
 
 ### POST `/leads/:id/convert-to-student`
 
+- Auth: Yes
 - Permission: `lead.convert`
-- Body: `{ "intake": "Fall 2026", "targetCountry": "Australia" }`
-- Response: created `student`, optional `studentCase`
+- Body:
+
+```json
+{
+  "intake": "Fall 2026",
+  "targetCountry": "Australia"
+}
+```
+
+- Success `200`: converted lead + created student (+ case when provided)
+- Module errors:
+  - `LEAD_NOT_FOUND`
 
 ---
 
-## Students + Cases Module
+## 7) Students Module
 
-### POST `/students`
+### Base Student Profile APIs
 
+#### POST `/students`
+
+- Auth: Yes
 - Permission: `student.create`
-
-### GET `/students`
-
-- Permission: `student.read`
-- Query: `search`, `page`, `limit`
-
-### GET `/students/:id`
-
-- Permission: `student.read`
-
-### PATCH `/students/:id`
-
-- Permission: `student.update`
-
-### GET `/students/:id/profile`
-
-- Permission: `student.read`
-- Description: returns full student profile including assignment, cases, education records, and test scores.
-
-### PUT `/students/:id/profile`
-
-- Permission: `student.update`
-- Description: upserts detailed profile in one call. If `educationRecords` or `testScores` is provided, that list is replaced.
-- Body (all fields optional):
+- Body:
 
 ```json
 {
   "fullName": "John Student",
-  "dob": "2002-01-15",
+  "dob": "2003-01-15",
   "gender": "Male",
-  "email": "john@student.com",
-  "phone": "+97798XXXXXXXX",
+  "email": "john@student.test",
+  "phone": "+9779800001234",
   "address": "Kathmandu",
   "passportNo": "P1234567",
   "passportExpiry": "2030-05-01",
   "nationality": "Nepali",
-  "status": "ACTIVE",
+  "status": "ACTIVE"
+}
+```
+
+- Success `201`: student object
+
+#### GET `/students`
+
+- Auth: Yes
+- Permission: `student.read`
+- Query: `search`, `page`, `limit`
+- Success `200`: paginated students
+
+#### GET `/students/:id`
+
+- Auth: Yes
+- Permission: `student.read`
+- Success `200`: base student record + assignment/cases snapshot
+- Module errors:
+  - `STUDENT_NOT_FOUND`
+
+#### PATCH `/students/:id`
+
+- Auth: Yes
+- Permission: `student.update`
+- Body: any subset of student base fields
+- Success `200`:
+
+```json
+{
+  "studentId": "uuid"
+}
+```
+
+- Module errors:
+  - `STUDENT_NOT_FOUND`
+
+### Detailed Student Profile APIs
+
+#### GET `/students/:id/profile`
+
+- Auth: Yes
+- Permission: `student.read`
+- Success `200`: student + assignments + cases + educationRecords + testScores + portal account summary
+
+#### PUT `/students/:id/profile`
+
+- Auth: Yes
+- Permission: `student.update`
+- Body (all optional; arrays replace existing records if provided):
+
+```json
+{
+  "fullName": "John Student",
+  "email": "john@student.test",
   "educationRecords": [
     {
       "level": "HIGH_SCHOOL",
-      "institution": "ABC Higher Secondary School",
+      "institution": "ABC School",
       "board": "NEB",
-      "score": "3.65 GPA",
+      "score": "3.6",
       "year": 2020
     }
   ],
@@ -458,20 +721,120 @@
 }
 ```
 
-### PATCH `/students/:id/assignment`
+- Success `200`: full updated detailed profile
+- Module errors:
+  - `STUDENT_NOT_FOUND`
+
+### Student Portal Login Credential APIs
+
+#### GET `/students/:id/portal-account`
+
+- Auth: Yes
+- Permission: `student.read`
+- Success `200` (`data`):
+
+```json
+{
+  "studentId": "uuid",
+  "hasPortalAccount": true,
+  "portalAccount": {
+    "userId": "uuid",
+    "name": "John Student",
+    "email": "john@student.test",
+    "phone": "+9779800001234",
+    "status": "ACTIVE",
+    "emailVerified": true,
+    "phoneVerified": false
+  }
+}
+```
+
+- Module errors:
+  - `STUDENT_NOT_FOUND`
+
+#### POST `/students/:id/portal-account`
+
+- Auth: Yes
+- Permissions: `student.update` and `user.create`
+- Purpose: create student login credentials.
+- Body:
+
+```json
+{
+  "email": "john@student.test",
+  "password": "StrongP@ss123",
+  "name": "John Student",
+  "phone": "+9779800001234",
+  "autoActivate": true,
+  "sendVerificationOtp": false
+}
+```
+
+- Success `201` (`data`):
+
+```json
+{
+  "studentId": "uuid",
+  "portalUserId": "uuid",
+  "consultancySlug": "acme-consultancy",
+  "email": "john@student.test",
+  "status": "ACTIVE",
+  "requiresEmailVerification": false
+}
+```
+
+- Module errors:
+  - `STUDENT_NOT_FOUND`
+  - `PORTAL_ACCOUNT_EXISTS`
+  - `USER_EXISTS`
+  - `PHONE_ALREADY_IN_USE`
+
+#### PATCH `/students/:id/portal-account`
+
+- Auth: Yes
+- Permissions: `student.update` and `user.update`
+- Purpose: update student login credentials/profile.
+- Body (at least one field required):
+
+```json
+{
+  "email": "john.new@student.test",
+  "password": "NewStrongP@ss123",
+  "name": "John Updated",
+  "phone": "+9779800009999",
+  "status": "ACTIVE",
+  "autoActivate": true,
+  "sendVerificationOtp": false
+}
+```
+
+- Success `200`: same payload shape as `GET /students/:id/portal-account`
+- Module errors:
+  - `STUDENT_NOT_FOUND`
+  - `PORTAL_ACCOUNT_NOT_FOUND`
+  - `USER_EXISTS`
+  - `PHONE_ALREADY_IN_USE`
+
+### Assignment, Education, Scores, and Cases
+
+#### PATCH `/students/:id/assignment`
 
 - Permission: `student.update`
 - Body:
 
 ```json
-{ "counselorId": "uuid", "docOfficerId": "uuid", "visaOfficerId": "uuid" }
+{
+  "counselorId": "uuid",
+  "docOfficerId": "uuid",
+  "visaOfficerId": "uuid"
+}
 ```
 
-### GET `/students/:id/education-records`
+#### GET `/students/:id/education-records`
 
 - Permission: `student.read`
 
-### POST `/students/:id/education-records`
+#### POST `/students/:id/education-records`
 
 - Permission: `student.update`
 - Body:
@@ -486,20 +849,20 @@
 }
 ```
 
-### PATCH `/students/:id/education-records/:educationRecordId`
+#### PATCH `/students/:id/education-records/:educationRecordId`
 
 - Permission: `student.update`
-- Body: partial `level`, `institution`, `board`, `score`, `year`
+- Body: partial `level|institution|board|score|year`
 
-### DELETE `/students/:id/education-records/:educationRecordId`
+#### DELETE `/students/:id/education-records/:educationRecordId`
 
 - Permission: `student.update`
 
-### GET `/students/:id/test-scores`
+#### GET `/students/:id/test-scores`
 
 - Permission: `student.read`
 
-### POST `/students/:id/test-scores`
+#### POST `/students/:id/test-scores`
 
 - Permission: `student.update`
 - Body:
@@ -512,35 +875,42 @@
 }
 ```
 
-### PATCH `/students/:id/test-scores/:testScoreId`
+#### PATCH `/students/:id/test-scores/:testScoreId`
 
 - Permission: `student.update`
-- Body: partial `testName`, `score`, `testDate`
+- Body: partial `testName|score|testDate`
 
-### DELETE `/students/:id/test-scores/:testScoreId`
+#### DELETE `/students/:id/test-scores/:testScoreId`
 
 - Permission: `student.update`
 
-### POST `/students/:id/cases`
+#### POST `/students/:id/cases`
 
 - Permission: `case.create`
 - Body:
 
 ```json
-{ "intake": "Fall 2026", "targetCountry": "Canada", "status": "ACTIVE" }
+{
+  "intake": "Fall 2026",
+  "targetCountry": "Canada",
+  "status": "ACTIVE"
+}
 ```
 
-### PATCH `/cases/:id`
+#### PATCH `/cases/:id`
 
 - Permission: `case.update`
-- Body: partial `intake`, `targetCountry`, `status`
+- Body: partial `intake|targetCountry|status`
 
 ---
 
-## Document Requests + Versioning Module
+## 8) Document Requests and Storage Module
 
-### POST `/students/:studentId/document-requests`
+### Document Request APIs
 
+#### POST `/students/:studentId/document-requests`
+
+- Auth: Yes
 - Permission: `doc.request.create`
 - Body:
 
@@ -554,34 +924,22 @@
 }
 ```
 
-### GET `/students/:studentId/document-requests`
+#### GET `/students/:studentId/document-requests`
 
 - Permission: `doc.request.read`
 
-### PATCH `/document-requests/:id`
+#### PATCH `/document-requests/:id`
 
 - Permission: `doc.request.update`
+- Body (partial): `title`, `instructions`, `dueAt`, `status`
 
-### POST `/document-requests/:id/cancel`
+#### POST `/document-requests/:id/cancel`
 
 - Permission: `doc.request.cancel`
 
-### POST `/documents/:versionId/verify`
+### Document Version and Verification APIs
 
-- Permission: `doc.verify` (for `VERIFIED`) or `doc.reject` (for `REJECTED`)
-- Body:
-
-```json
-{ "status": "VERIFIED", "reason": "optional" }
-```
-
-- Behavior: auto-fulfills linked request when verified
-
----
-
-## Storage Module (Signed URL)
-
-### POST `/storage/sign-upload`
+#### POST `/storage/sign-upload`
 
 - Permissions: `storage.sign.upload`, `doc.upload`
 - Body:
@@ -598,35 +956,85 @@
 }
 ```
 
-- Response:
+- Success `200` (`data`):
 
 ```json
 {
-  "success": true,
-  "data": {
-    "documentVersionId": "uuid",
-    "bucket": "consultease",
-    "objectKey": "{consultancyId}/students/{studentId}/documents/{documentTypeKey}/{documentVersionId}/passport.pdf",
-    "uploadUrl": "https://...",
-    "expiresInSeconds": 1200
-  },
-  "requestId": "uuid"
+  "documentVersionId": "uuid",
+  "bucket": "consultease",
+  "objectKey": "{consultancyId}/students/{studentId}/documents/passport/{documentVersionId}/passport.pdf",
+  "uploadUrl": "https://...",
+  "expiresInSeconds": 1200
 }
 ```
 
-### POST `/documents/confirm-upload`
+- Module errors:
+  - `INVALID_MIME_TYPE`
+  - `INVALID_FILE_SIZE`
+  - `INVALID_FILE_NAME`
+  - `STUDENT_NOT_FOUND`
+  - `INVALID_REQUEST`
+  - `REQUEST_CLOSED`
+
+#### POST `/documents/confirm-upload`
 
 - Permission: `doc.upload`
-- Body: `{ "documentVersionId": "uuid" }`
-- Behavior: HEAD object check required before activation
+- Body:
 
-### POST `/storage/sign-download`
+```json
+{
+  "documentVersionId": "uuid"
+}
+```
+
+- Success `200`: confirmed version object
+- Module errors:
+  - `VERSION_NOT_FOUND`
+  - `UPLOAD_NOT_FOUND`
+
+#### POST `/storage/sign-download`
 
 - Permissions: `storage.sign.download`, `doc.read`
-- Body: `{ "documentVersionId": "uuid", "expiresInSeconds": 1200 }`
-- Response: signed GET URL
+- Body:
 
-### POST `/storage/sign-upload/user-profile`
+```json
+{
+  "documentVersionId": "uuid",
+  "expiresInSeconds": 1200
+}
+```
+
+- Success `200` (`data`):
+
+```json
+{
+  "documentVersionId": "uuid",
+  "downloadUrl": "https://...",
+  "expiresInSeconds": 1200
+}
+```
+
+#### POST `/documents/:versionId/verify`
+
+- If body status is `VERIFIED`, permission `doc.verify` is required.
+- If body status is `REJECTED`, permission `doc.reject` is required.
+- Body:
+
+```json
+{
+  "status": "VERIFIED",
+  "reason": "Required when status is REJECTED"
+}
+```
+
+- Success `200`: verification record
+- Module errors:
+  - `VERSION_NOT_FOUND`
+  - `REASON_REQUIRED`
+
+### User Profile Image Storage APIs
+
+#### POST `/storage/sign-upload/user-profile`
 
 - Permissions: `storage.sign.upload`, `user.update`
 - Body:
@@ -641,7 +1049,7 @@
 }
 ```
 
-### POST `/storage/confirm-upload/user-profile`
+#### POST `/storage/confirm-upload/user-profile`
 
 - Permission: `user.update`
 - Body:
@@ -654,12 +1062,21 @@
 }
 ```
 
-### POST `/storage/sign-download/user-profile`
+#### POST `/storage/sign-download/user-profile`
 
 - Permissions: `storage.sign.download`, `user.read`
-- Body: `{ "userId": "uuid", "expiresInSeconds": 1200 }`
+- Body:
 
-### POST `/storage/sign-upload/student-profile`
+```json
+{
+  "userId": "uuid",
+  "expiresInSeconds": 1200
+}
+```
+
+### Student Profile Image Storage APIs
+
+#### POST `/storage/sign-upload/student-profile`
 
 - Permissions: `storage.sign.upload`, `student.update`
 - Body:
@@ -674,7 +1091,7 @@
 }
 ```
 
-### POST `/storage/confirm-upload/student-profile`
+#### POST `/storage/confirm-upload/student-profile`
 
 - Permission: `student.update`
 - Body:
@@ -687,89 +1104,115 @@
 }
 ```
 
-### POST `/storage/sign-download/student-profile`
+#### POST `/storage/sign-download/student-profile`
 
 - Permissions: `storage.sign.download`, `student.read`
-- Body: `{ "studentId": "uuid", "expiresInSeconds": 1200 }`
-
----
-
-## Dashboard Module
-
-### GET `/students/:studentId/dashboard`
-
-- Permission: `student.read`
-- Response:
+- Body:
 
 ```json
 {
-  "success": true,
-  "data": {
-    "student": { "id": "uuid", "fullName": "...", "status": "ACTIVE" },
-    "cases": [],
-    "documentRequests": {
-      "open": [],
-      "recentlyFulfilled": []
-    },
-    "documentsByType": [
-      {
-        "documentTypeKey": "passport",
-        "latestVersion": { "id": "uuid", "versionNumber": 3 },
-        "verificationStatus": "PENDING",
-        "lastUpdatedAt": "2026-02-24T10:00:00.000Z"
-      }
-    ]
-  },
-  "requestId": "uuid"
+  "studentId": "uuid",
+  "expiresInSeconds": 1200
 }
 ```
 
 ---
 
-## Audit Module
+## 9) Dashboard Module
+
+### GET `/students/:studentId/dashboard`
+
+- Auth: Yes
+- Permission: `student.read`
+- Success `200` (`data`):
+
+```json
+{
+  "student": {
+    "id": "uuid",
+    "fullName": "John Student",
+    "email": "john@student.test",
+    "phone": "+9779800001234",
+    "status": "ACTIVE"
+  },
+  "cases": [],
+  "documentRequests": {
+    "open": [],
+    "recentlyFulfilled": []
+  },
+  "documentsByType": [
+    {
+      "documentTypeKey": "passport",
+      "latestVersion": {
+        "id": "uuid",
+        "versionNumber": 2
+      },
+      "verificationStatus": "PENDING",
+      "lastUpdatedAt": "2026-02-26T12:00:00.000Z"
+    }
+  ]
+}
+```
+
+### GET `/students/me/dashboard`
+
+- Auth: Yes
+- Intended for student portal account login.
+- No explicit permission check; account must be linked to a student profile.
+- Success `200`: same shape as `/students/:studentId/dashboard`
+- Module errors:
+  - `STUDENT_PORTAL_PROFILE_NOT_FOUND`
+
+---
+
+## 10) Audit Module
 
 ### GET `/audit`
 
+- Auth: Yes
 - Permission: `audit.read`
-- Query: `actorUserId`, `action`, `from`, `to`, `page`, `limit`
-- Response: paginated audit events
+- Query params:
+  - `actorUserId` (uuid)
+  - `action`
+  - `from` (ISO date string)
+  - `to` (ISO date string)
+  - `page`
+  - `limit`
+- Success `200`: paginated audit logs
 
 ---
 
-## File Upload/Download Rules
+## 11) Student Login Flow (Frontend Ready)
 
-- Bucket: `consultease`
-- Object keys are server-generated only.
-- Implemented pattern for documents:
+1. Staff creates student base profile using `POST /students`.
+2. Staff creates student credentials using `POST /students/:id/portal-account`.
+3. If `autoActivate` was `false`, verify with OTP:
+   - `POST /auth/request-otp`
+   - `POST /auth/verify-otp`
+4. Student logs in using `POST /auth/login` with portal account email/password.
+5. Student calls `GET /students/me/dashboard` with:
+   - `Authorization: Bearer <accessToken>`
+   - `X-Consultancy-Slug: <slug>`
+6. Student refreshes token via `POST /auth/refresh` (refresh token rotation enabled).
+
+---
+
+## 12) Storage and MIME Rules
+
+- Root bucket: `consultease`
+- Document object key pattern:
   - `{consultancyId}/students/{studentId}/documents/{documentTypeKey}/{documentVersionId}/{safeFileName}`
-- Implemented pattern for user profile image:
-  - `{consultancyId}/users/{userId}/profile/{uuid}-{safeFileName}`
-- Implemented pattern for student profile image:
-  - `{consultancyId}/students/{studentId}/profile/{uuid}-{safeFileName}`
-- Signed URL expiry defaults to 1200 seconds and can be overridden per request up to 3600 seconds.
-- Allowed MIME types: `application/pdf`, `image/jpeg`, `image/jpg`, `image/png`
-- Allowed profile image MIME types: `image/jpeg`, `image/jpg`, `image/png`, `image/webp`
-
----
-
-## Auth Notes For Frontend
-
-- Login is blocked until email verification is complete.
-- Refresh token rotation: frontend must replace stored refresh token after every `/auth/refresh`.
-- Include `X-Consultancy-Slug` on all consultancy-protected routes.
-
----
-
-## Typical End-to-End Flow
-
-1. Register consultancy via `/consultancies/register`
-2. Verify owner OTP via `/auth/verify-otp`
-3. Login via `/auth/login`
-4. Invite users via `/users/invite`
-5. Accept invitation via `/invitations/accept`
-6. Create leads and convert via `/leads/:id/convert-to-student`
-7. Create document requests via `/students/:id/document-requests`
-8. Sign upload URL via `/storage/sign-upload`
-9. Confirm upload via `/documents/confirm-upload`
-10. Verify/reject document via `/documents/:versionId/verify`
-11. Read consolidated state via `/students/:id/dashboard`
+- User profile object key pattern:
+  - `{consultancyId}/users/{userId}/profile/{uuid-safeFileName}`
+- Student profile object key pattern:
+  - `{consultancyId}/students/{studentId}/profile/{uuid-safeFileName}`
+- Allowed document mime types:
+  - `application/pdf`
+  - `image/jpeg`
+  - `image/jpg`
+  - `image/png`
+- Allowed profile image mime types:
+  - `image/jpeg`
+  - `image/jpg`
+  - `image/png`
+  - `image/webp`

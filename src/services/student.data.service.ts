@@ -2,6 +2,21 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "../config/prisma";
 
 const detailedProfileInclude: Prisma.StudentInclude = {
+  portalUser: {
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      phone: true,
+      status: true,
+      authIdentity: {
+        select: {
+          emailVerifiedAt: true,
+          phoneVerifiedAt: true,
+        },
+      },
+    },
+  },
   assignments: true,
   cases: { orderBy: { createdAt: "desc" } },
   educationRecords: { orderBy: [{ year: "desc" }, { createdAt: "desc" }] },
@@ -38,9 +53,24 @@ export class StudentDataService {
     return prisma.student.findFirst({
       where: { id: studentId, consultancyId },
       include: {
+        portalUser: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            phone: true,
+            status: true,
+          },
+        },
         assignments: true,
         cases: { orderBy: { createdAt: "desc" } },
       },
+    });
+  }
+
+  static findByPortalUserId(consultancyId: string, portalUserId: string) {
+    return prisma.student.findFirst({
+      where: { consultancyId, portalUserId },
     });
   }
 
@@ -258,6 +288,38 @@ export class StudentDataService {
           },
         },
       },
+    });
+  }
+
+  static getPortalAccount(consultancyId: string, studentId: string) {
+    return prisma.student.findFirst({
+      where: { id: studentId, consultancyId },
+      select: {
+        id: true,
+        portalUserId: true,
+        portalUser: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            phone: true,
+            status: true,
+            authIdentity: {
+              select: {
+                emailVerifiedAt: true,
+                phoneVerifiedAt: true,
+              },
+            },
+          },
+        },
+      },
+    });
+  }
+
+  static linkPortalUser(consultancyId: string, studentId: string, portalUserId: string) {
+    return prisma.student.updateMany({
+      where: { consultancyId, id: studentId },
+      data: { portalUserId },
     });
   }
 }

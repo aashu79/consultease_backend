@@ -1,67 +1,36 @@
-import { Router } from "express";
-import { StudentCaseStatus, StudentStatus } from "@prisma/client";
-import { z } from "zod";
+﻿import { Router } from "express";
 import { StudentController } from "../controllers/student.controller";
 import { auth } from "../middlewares/auth";
 import { requirePermission } from "../middlewares/requirePermission";
 import { validate } from "../middlewares/validate";
 import { asyncHandler } from "../utils/errors";
+import {
+  assignStudentSchema,
+  createCaseSchema,
+  createEducationRecordSchema,
+  createStudentPortalAccountSchema,
+  createStudentSchema,
+  createTestScoreSchema,
+  deleteEducationRecordSchema,
+  deleteTestScoreSchema,
+  listStudentsSchema,
+  studentIdParamSchema,
+  updateCaseSchema,
+  updateEducationRecordSchema,
+  updateStudentPortalAccountSchema,
+  updateStudentSchema,
+  updateTestScoreSchema,
+  upsertStudentProfileSchema,
+} from "../validations/student.validation";
 
 const router = Router();
-
-const educationRecordSchema = z.object({
-  level: z.string().min(1),
-  institution: z.string().min(1),
-  board: z.string().optional(),
-  score: z.string().optional(),
-  year: z.number().int().min(1900).max(2200).optional(),
-});
-
-const educationRecordUpdateSchema = z
-  .object({
-    level: z.string().min(1).optional(),
-    institution: z.string().min(1).optional(),
-    board: z.string().optional(),
-    score: z.string().optional(),
-    year: z.number().int().min(1900).max(2200).optional(),
-  })
-  .refine((data) => Object.keys(data).length > 0, "Provide at least one field to update");
-
-const testScoreSchema = z.object({
-  testName: z.string().min(2),
-  score: z.string().min(1),
-  testDate: z.string().optional(),
-});
-
-const testScoreUpdateSchema = z
-  .object({
-    testName: z.string().min(2).optional(),
-    score: z.string().min(1).optional(),
-    testDate: z.string().optional(),
-  })
-  .refine((data) => Object.keys(data).length > 0, "Provide at least one field to update");
 
 // Students: create base profile
 router.post(
   "/",
   auth,
   requirePermission("student.create"),
-  validate(
-    z.object({
-      body: z.object({
-        fullName: z.string().min(2),
-        dob: z.string().optional(),
-        gender: z.string().optional(),
-        email: z.string().email().optional(),
-        phone: z.string().min(7).optional(),
-        address: z.string().optional(),
-        passportNo: z.string().optional(),
-        passportExpiry: z.string().optional(),
-        nationality: z.string().optional(),
-        status: z.nativeEnum(StudentStatus).optional(),
-      }),
-    }),
-  ),
+  validate(createStudentSchema),
   asyncHandler(StudentController.create),
 );
 
@@ -70,15 +39,7 @@ router.get(
   "/",
   auth,
   requirePermission("student.read"),
-  validate(
-    z.object({
-      query: z.object({
-        page: z.string().optional(),
-        limit: z.string().optional(),
-        search: z.string().optional(),
-      }),
-    }),
-  ),
+  validate(listStudentsSchema),
   asyncHandler(StudentController.list),
 );
 
@@ -87,7 +48,7 @@ router.get(
   "/:id",
   auth,
   requirePermission("student.read"),
-  validate(z.object({ params: z.object({ id: z.string().uuid() }) })),
+  validate(studentIdParamSchema),
   asyncHandler(StudentController.getById),
 );
 
@@ -96,23 +57,7 @@ router.patch(
   "/:id",
   auth,
   requirePermission("student.update"),
-  validate(
-    z.object({
-      params: z.object({ id: z.string().uuid() }),
-      body: z.object({
-        fullName: z.string().min(2).optional(),
-        dob: z.string().optional(),
-        gender: z.string().optional(),
-        email: z.string().email().optional(),
-        phone: z.string().min(7).optional(),
-        address: z.string().optional(),
-        passportNo: z.string().optional(),
-        passportExpiry: z.string().optional(),
-        nationality: z.string().optional(),
-        status: z.nativeEnum(StudentStatus).optional(),
-      }),
-    }),
-  ),
+  validate(updateStudentSchema),
   asyncHandler(StudentController.update),
 );
 
@@ -121,7 +66,7 @@ router.get(
   "/:id/profile",
   auth,
   requirePermission("student.read"),
-  validate(z.object({ params: z.object({ id: z.string().uuid() }) })),
+  validate(studentIdParamSchema),
   asyncHandler(StudentController.getProfile),
 );
 
@@ -130,26 +75,35 @@ router.put(
   "/:id/profile",
   auth,
   requirePermission("student.update"),
-  validate(
-    z.object({
-      params: z.object({ id: z.string().uuid() }),
-      body: z.object({
-        fullName: z.string().min(2).optional(),
-        dob: z.string().optional(),
-        gender: z.string().optional(),
-        email: z.string().email().optional(),
-        phone: z.string().min(7).optional(),
-        address: z.string().optional(),
-        passportNo: z.string().optional(),
-        passportExpiry: z.string().optional(),
-        nationality: z.string().optional(),
-        status: z.nativeEnum(StudentStatus).optional(),
-        educationRecords: z.array(educationRecordSchema).optional(),
-        testScores: z.array(testScoreSchema).optional(),
-      }),
-    }),
-  ),
+  validate(upsertStudentProfileSchema),
   asyncHandler(StudentController.upsertProfile),
+);
+
+// Students: portal login account operations
+router.get(
+  "/:id/portal-account",
+  auth,
+  requirePermission("student.read"),
+  validate(studentIdParamSchema),
+  asyncHandler(StudentController.getPortalAccount),
+);
+
+router.post(
+  "/:id/portal-account",
+  auth,
+  requirePermission("student.update"),
+  requirePermission("user.create"),
+  validate(createStudentPortalAccountSchema),
+  asyncHandler(StudentController.createPortalAccount),
+);
+
+router.patch(
+  "/:id/portal-account",
+  auth,
+  requirePermission("student.update"),
+  requirePermission("user.update"),
+  validate(updateStudentPortalAccountSchema),
+  asyncHandler(StudentController.updatePortalAccount),
 );
 
 // Students: assign staff ownership
@@ -157,16 +111,7 @@ router.patch(
   "/:id/assignment",
   auth,
   requirePermission("student.update"),
-  validate(
-    z.object({
-      params: z.object({ id: z.string().uuid() }),
-      body: z.object({
-        counselorId: z.string().uuid().nullable().optional(),
-        docOfficerId: z.string().uuid().nullable().optional(),
-        visaOfficerId: z.string().uuid().nullable().optional(),
-      }),
-    }),
-  ),
+  validate(assignStudentSchema),
   asyncHandler(StudentController.assign),
 );
 
@@ -175,11 +120,7 @@ router.get(
   "/:id/education-records",
   auth,
   requirePermission("student.read"),
-  validate(
-    z.object({
-      params: z.object({ id: z.string().uuid() }),
-    }),
-  ),
+  validate(studentIdParamSchema),
   asyncHandler(StudentController.listEducationRecords),
 );
 
@@ -188,12 +129,7 @@ router.post(
   "/:id/education-records",
   auth,
   requirePermission("student.update"),
-  validate(
-    z.object({
-      params: z.object({ id: z.string().uuid() }),
-      body: educationRecordSchema,
-    }),
-  ),
+  validate(createEducationRecordSchema),
   asyncHandler(StudentController.createEducationRecord),
 );
 
@@ -202,15 +138,7 @@ router.patch(
   "/:id/education-records/:educationRecordId",
   auth,
   requirePermission("student.update"),
-  validate(
-    z.object({
-      params: z.object({
-        id: z.string().uuid(),
-        educationRecordId: z.string().uuid(),
-      }),
-      body: educationRecordUpdateSchema,
-    }),
-  ),
+  validate(updateEducationRecordSchema),
   asyncHandler(StudentController.updateEducationRecord),
 );
 
@@ -219,14 +147,7 @@ router.delete(
   "/:id/education-records/:educationRecordId",
   auth,
   requirePermission("student.update"),
-  validate(
-    z.object({
-      params: z.object({
-        id: z.string().uuid(),
-        educationRecordId: z.string().uuid(),
-      }),
-    }),
-  ),
+  validate(deleteEducationRecordSchema),
   asyncHandler(StudentController.deleteEducationRecord),
 );
 
@@ -235,11 +156,7 @@ router.get(
   "/:id/test-scores",
   auth,
   requirePermission("student.read"),
-  validate(
-    z.object({
-      params: z.object({ id: z.string().uuid() }),
-    }),
-  ),
+  validate(studentIdParamSchema),
   asyncHandler(StudentController.listTestScores),
 );
 
@@ -248,12 +165,7 @@ router.post(
   "/:id/test-scores",
   auth,
   requirePermission("student.update"),
-  validate(
-    z.object({
-      params: z.object({ id: z.string().uuid() }),
-      body: testScoreSchema,
-    }),
-  ),
+  validate(createTestScoreSchema),
   asyncHandler(StudentController.createTestScore),
 );
 
@@ -262,15 +174,7 @@ router.patch(
   "/:id/test-scores/:testScoreId",
   auth,
   requirePermission("student.update"),
-  validate(
-    z.object({
-      params: z.object({
-        id: z.string().uuid(),
-        testScoreId: z.string().uuid(),
-      }),
-      body: testScoreUpdateSchema,
-    }),
-  ),
+  validate(updateTestScoreSchema),
   asyncHandler(StudentController.updateTestScore),
 );
 
@@ -279,14 +183,7 @@ router.delete(
   "/:id/test-scores/:testScoreId",
   auth,
   requirePermission("student.update"),
-  validate(
-    z.object({
-      params: z.object({
-        id: z.string().uuid(),
-        testScoreId: z.string().uuid(),
-      }),
-    }),
-  ),
+  validate(deleteTestScoreSchema),
   asyncHandler(StudentController.deleteTestScore),
 );
 
@@ -295,16 +192,7 @@ router.post(
   "/:id/cases",
   auth,
   requirePermission("case.create"),
-  validate(
-    z.object({
-      params: z.object({ id: z.string().uuid() }),
-      body: z.object({
-        intake: z.string().min(2),
-        targetCountry: z.string().min(2),
-        status: z.nativeEnum(StudentCaseStatus).optional(),
-      }),
-    }),
-  ),
+  validate(createCaseSchema),
   asyncHandler(StudentController.createCase),
 );
 
@@ -315,16 +203,7 @@ caseRouter.patch(
   "/:id",
   auth,
   requirePermission("case.update"),
-  validate(
-    z.object({
-      params: z.object({ id: z.string().uuid() }),
-      body: z.object({
-        intake: z.string().optional(),
-        targetCountry: z.string().optional(),
-        status: z.nativeEnum(StudentCaseStatus).optional(),
-      }),
-    }),
-  ),
+  validate(updateCaseSchema),
   asyncHandler(StudentController.updateCase),
 );
 

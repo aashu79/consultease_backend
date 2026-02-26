@@ -1,10 +1,37 @@
-import { StudentCaseStatus, StudentStatus } from "@prisma/client";
+import { OtpChannel, OtpPurpose, Prisma, StudentCaseStatus, StudentStatus, UserStatus } from "@prisma/client";
+import { prisma } from "../config/prisma";
 import { StudentDataService } from "./student.data.service";
 import { getPagination } from "../utils/pagination";
 import { AppError } from "../utils/errors";
 import { AuditService } from "./audit.service";
+import { hashValue } from "../utils/crypto";
+import { UserRepository } from "../repositories/user.repository";
+import { AuthService } from "./auth.service";
 
 export class StudentService {
+  private static throwIfPortalUniqueConstraint(error: unknown): never {
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === "P2002"
+    ) {
+      const target = Array.isArray(error.meta?.target)
+        ? error.meta.target.map((item) => String(item))
+        : [];
+
+      if (target.includes("email")) {
+        throw new AppError(409, "USER_EXISTS", "A user with this email already exists");
+      }
+
+      if (target.includes("phone")) {
+        throw new AppError(409, "PHONE_ALREADY_IN_USE", "A user with this phone already exists");
+      }
+
+      throw new AppError(409, "DUPLICATE_VALUE", "Duplicate value violates unique constraint");
+    }
+
+    throw error;
+  }
+
   static async createStudent(
     consultancyId: string,
     payload: {
@@ -535,6 +562,300 @@ export class StudentService {
     return assignment;
   }
 
+  static async getPortalAccount(consultancyId: string, studentId: string) {
+    const student = await StudentDataService.getPortalAccount(consultancyId, studentId);
+    if (!student) {
+      throw new AppError(404, "STUDENT_NOT_FOUND", "Student not found");
+    }
+
+    return {
+      studentId: student.id,
+      hasPortalAccount: Boolean(student.portalUser),
+      portalAccount: student.portalUser
+        ? {
+            userId: student.portalUser.id,
+            name: student.portalUser.name,
+            email: student.portalUser.email,
+            phone: student.portalUser.phone,
+            status: student.portalUser.status,
+            emailVerified: Boolean(student.portalUser.authIdentity?.emailVerifiedAt),
+            phoneVerified: Boolean(student.portalUser.authIdentity?.phoneVerifiedAt),
+          }
+        : null,
+    };
+  }
+
+  static async createPortalAccount(
+    consultancyId: string,
+    consultancySlug: string,
+    studentId: string,
+    payload: {
+      email: string;
+      password: string;
+      name?: string;
+      phone?: string;
+      autoActivate?: boolean;
+      sendVerificationOtp?: boolean;
+    },
+    actorUserId: string,
+    auditCtx: { ip?: string; userAgent?: string; requestId?: string },
+  ) {
+    const student = await StudentDataService.findById(consultancyId, studentId);
+    if (!student) {
+      throw new AppError(404, "STUDENT_NOT_FOUND", "Student not found");
+    }
+    if (student.portalUserId) {
+      throw new AppError(409, "PORTAL_ACCOUNT_EXISTS", "Student portal account already exists");
+    }
+
+    const email = payload.email.trim().toLowerCase();
+    const existingUser = await UserRepository.findByEmail(consultancyId, email);
+    if (existingUser) {
+      throw new AppError(409, "USER_EXISTS", "A user with this email already exists");
+    }
+
+    let phoneToUse = payload.phone?.trim() || student.phone?.trim() || undefined;
+    if (phoneToUse) {
+      const existingPhoneUser = await UserRepository.findByPhone(consultancyId, phoneToUse);
+      if (existingPhoneUser) {
+        // If phone was explicitly requested, fail; if inherited from student profile, skip phone on user account.
+        if (payload.phone?.trim()) {
+          throw new AppError(409, "PHONE_ALREADY_IN_USE", "A user with this phone already exists");
+        }
+        phoneToUse = undefined;
+      }
+    }
+
+    const autoActivate = payload.autoActivate ?? true;
+    const sendVerificationOtp = payload.sendVerificationOtp ?? !autoActivate;
+    const passwordHash = await hashValue(payload.password);
+
+    let portalUser;
+    try {
+      portalUser = await prisma.$transaction(async (tx) => {
+        const createdUser = await tx.user.create({
+          data: {
+            consultancyId,
+            name: payload.name ?? student.fullName,
+            email,
+            phone: phoneToUse ?? null,
+            status: autoActivate ? UserStatus.ACTIVE : UserStatus.PENDING_VERIFICATION,
+          },
+        });
+
+        await tx.authIdentity.create({
+          data: {
+            consultancyId,
+            userId: createdUser.id,
+            email,
+            phone: phoneToUse ?? null,
+            emailVerifiedAt: autoActivate ? new Date() : null,
+          },
+        });
+
+        await tx.authCredential.create({
+          data: {
+            consultancyId,
+            userId: createdUser.id,
+            passwordHash,
+          },
+        });
+
+        await tx.student.update({
+          where: { id: studentId },
+          data: { portalUserId: createdUser.id },
+        });
+
+        return createdUser;
+      });
+    } catch (error) {
+      this.throwIfPortalUniqueConstraint(error);
+    }
+
+    if (sendVerificationOtp) {
+      await AuthService.requestOtp({
+        consultancySlug,
+        destination: email,
+        channel: OtpChannel.EMAIL,
+        purpose: OtpPurpose.VERIFY_EMAIL,
+        ip: auditCtx.ip,
+        userAgent: auditCtx.userAgent,
+        actorUserId,
+        requestId: auditCtx.requestId,
+      });
+    }
+
+    await AuditService.log({
+      consultancyId,
+      actorUserId,
+      action: "student.portal_account.created",
+      entityType: "Student",
+      entityId: studentId,
+      meta: {
+        portalUserId: portalUser.id,
+        autoActivate,
+        sendVerificationOtp,
+        requestId: auditCtx.requestId,
+      },
+      ip: auditCtx.ip,
+      userAgent: auditCtx.userAgent,
+    });
+
+    return {
+      studentId,
+      portalUserId: portalUser.id,
+      consultancySlug,
+      email,
+      status: portalUser.status,
+      requiresEmailVerification: !autoActivate,
+    };
+  }
+
+  static async updatePortalAccount(
+    consultancyId: string,
+    consultancySlug: string,
+    studentId: string,
+    payload: {
+      email?: string;
+      password?: string;
+      name?: string;
+      phone?: string | null;
+      status?: UserStatus;
+      autoActivate?: boolean;
+      sendVerificationOtp?: boolean;
+    },
+    actorUserId: string,
+    auditCtx: { ip?: string; userAgent?: string; requestId?: string },
+  ) {
+    const portalRecord = await StudentDataService.getPortalAccount(consultancyId, studentId);
+    if (!portalRecord) {
+      throw new AppError(404, "STUDENT_NOT_FOUND", "Student not found");
+    }
+    if (!portalRecord.portalUserId) {
+      throw new AppError(404, "PORTAL_ACCOUNT_NOT_FOUND", "Student portal account not found");
+    }
+
+    const normalizedEmail = payload.email?.trim().toLowerCase();
+    const normalizedPhone =
+      payload.phone === null
+        ? null
+        : payload.phone !== undefined
+          ? payload.phone.trim() || null
+          : undefined;
+
+    if (
+      normalizedEmail &&
+      normalizedEmail !== (portalRecord.portalUser?.email ?? "").trim().toLowerCase()
+    ) {
+      const existingByEmail = await UserRepository.findByEmail(consultancyId, normalizedEmail);
+      if (existingByEmail && existingByEmail.id !== portalRecord.portalUserId) {
+        throw new AppError(409, "USER_EXISTS", "A user with this email already exists");
+      }
+    }
+
+    if (typeof normalizedPhone === "string") {
+      const existingByPhone = await UserRepository.findByPhone(consultancyId, normalizedPhone);
+      if (existingByPhone && existingByPhone.id !== portalRecord.portalUserId) {
+        throw new AppError(409, "PHONE_ALREADY_IN_USE", "A user with this phone already exists");
+      }
+    }
+
+    const updates: {
+      user?: {
+        name?: string;
+        phone?: string | null;
+        email?: string;
+        status?: UserStatus;
+      };
+      identity?: {
+        email?: string;
+        phone?: string | null;
+        emailVerifiedAt?: Date | null;
+      };
+      passwordHash?: string;
+    } = {};
+
+    if (payload.name !== undefined || payload.phone !== undefined || payload.status !== undefined || payload.email !== undefined) {
+      updates.user = {
+        name: payload.name,
+        phone: normalizedPhone,
+        status: payload.status,
+        email: normalizedEmail,
+      };
+    }
+
+    if (payload.email !== undefined || payload.phone !== undefined || payload.autoActivate !== undefined) {
+      updates.identity = {
+        email: normalizedEmail,
+        phone: normalizedPhone,
+        emailVerifiedAt: payload.autoActivate === true ? new Date() : payload.autoActivate === false ? null : undefined,
+      };
+    }
+
+    if (payload.password) {
+      updates.passwordHash = await hashValue(payload.password);
+    }
+
+    try {
+      await prisma.$transaction(async (tx) => {
+        if (updates.user) {
+          await tx.user.update({
+            where: { id: portalRecord.portalUserId! },
+            data: updates.user,
+          });
+        }
+
+        if (updates.identity) {
+          await tx.authIdentity.update({
+            where: { userId: portalRecord.portalUserId! },
+            data: updates.identity,
+          });
+        }
+
+        if (updates.passwordHash) {
+          await tx.authCredential.update({
+            where: { userId: portalRecord.portalUserId! },
+            data: { passwordHash: updates.passwordHash, passwordUpdatedAt: new Date() },
+          });
+        }
+      });
+    } catch (error) {
+      this.throwIfPortalUniqueConstraint(error);
+    }
+
+    const shouldSendOtp = payload.sendVerificationOtp ?? (payload.autoActivate === false);
+    const finalEmail = (payload.email ?? portalRecord.portalUser?.email ?? "").trim().toLowerCase();
+    if (shouldSendOtp && finalEmail) {
+      await AuthService.requestOtp({
+        consultancySlug,
+        destination: finalEmail,
+        channel: OtpChannel.EMAIL,
+        purpose: OtpPurpose.VERIFY_EMAIL,
+        ip: auditCtx.ip,
+        userAgent: auditCtx.userAgent,
+        actorUserId,
+        requestId: auditCtx.requestId,
+      });
+    }
+
+    await AuditService.log({
+      consultancyId,
+      actorUserId,
+      action: "student.portal_account.updated",
+      entityType: "Student",
+      entityId: studentId,
+      meta: {
+        portalUserId: portalRecord.portalUserId,
+        fields: Object.keys(payload),
+        requestId: auditCtx.requestId,
+      },
+      ip: auditCtx.ip,
+      userAgent: auditCtx.userAgent,
+    });
+
+    return this.getPortalAccount(consultancyId, studentId);
+  }
+
   static async getDashboard(consultancyId: string, studentId: string) {
     const student = await StudentDataService.getDashboard(consultancyId, studentId);
     if (!student) {
@@ -571,5 +892,18 @@ export class StudentService {
       },
       documentsByType,
     };
+  }
+
+  static async getDashboardByPortalUser(consultancyId: string, portalUserId: string) {
+    const student = await StudentDataService.findByPortalUserId(consultancyId, portalUserId);
+    if (!student) {
+      throw new AppError(
+        404,
+        "STUDENT_PORTAL_PROFILE_NOT_FOUND",
+        "No student profile linked to this account",
+      );
+    }
+
+    return this.getDashboard(consultancyId, student.id);
   }
 }

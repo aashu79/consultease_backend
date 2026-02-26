@@ -1,10 +1,19 @@
 ﻿import { Router } from "express";
-import { z } from "zod";
 import { StorageController } from "../controllers/storage.controller";
 import { auth } from "../middlewares/auth";
 import { requirePermission } from "../middlewares/requirePermission";
 import { validate } from "../middlewares/validate";
 import { asyncHandler } from "../utils/errors";
+import {
+  confirmStudentProfileUploadSchema,
+  confirmUserProfileUploadSchema,
+  signStorageDownloadSchema,
+  signStorageUploadSchema,
+  signStudentProfileDownloadSchema,
+  signStudentProfileUploadSchema,
+  signUserProfileDownloadSchema,
+  signUserProfileUploadSchema,
+} from "../validations/storage.validation";
 
 const router = Router();
 
@@ -13,19 +22,7 @@ router.post(
   auth,
   requirePermission("storage.sign.upload"),
   requirePermission("doc.upload"),
-  validate(
-    z.object({
-      body: z.object({
-        studentId: z.string().uuid(),
-        documentTypeKey: z.string().min(2),
-        fileName: z.string().min(1),
-        mimeType: z.string().min(3),
-        sizeBytes: z.number().int().positive(),
-        requestId: z.string().uuid().optional(),
-        expiresInSeconds: z.number().int().positive().optional(),
-      }),
-    }),
-  ),
+  validate(signStorageUploadSchema),
   asyncHandler(StorageController.signUpload),
 );
 
@@ -34,14 +31,7 @@ router.post(
   auth,
   requirePermission("storage.sign.download"),
   requirePermission("doc.read"),
-  validate(
-    z.object({
-      body: z.object({
-        documentVersionId: z.string().uuid(),
-        expiresInSeconds: z.number().int().positive().optional(),
-      }),
-    }),
-  ),
+  validate(signStorageDownloadSchema),
   asyncHandler(StorageController.signDownload),
 );
 
@@ -50,17 +40,7 @@ router.post(
   auth,
   requirePermission("storage.sign.upload"),
   requirePermission("user.update"),
-  validate(
-    z.object({
-      body: z.object({
-        userId: z.string().uuid(),
-        fileName: z.string().min(1),
-        mimeType: z.string().min(3),
-        sizeBytes: z.number().int().positive(),
-        expiresInSeconds: z.number().int().positive().optional(),
-      }),
-    }),
-  ),
+  validate(signUserProfileUploadSchema),
   asyncHandler(StorageController.signUserProfileUpload),
 );
 
@@ -68,15 +48,7 @@ router.post(
   "/confirm-upload/user-profile",
   auth,
   requirePermission("user.update"),
-  validate(
-    z.object({
-      body: z.object({
-        userId: z.string().uuid(),
-        objectKey: z.string().min(10),
-        mimeType: z.string().min(3),
-      }),
-    }),
-  ),
+  validate(confirmUserProfileUploadSchema),
   asyncHandler(StorageController.confirmUserProfileUpload),
 );
 
@@ -85,14 +57,7 @@ router.post(
   auth,
   requirePermission("storage.sign.download"),
   requirePermission("user.read"),
-  validate(
-    z.object({
-      body: z.object({
-        userId: z.string().uuid(),
-        expiresInSeconds: z.number().int().positive().optional(),
-      }),
-    }),
-  ),
+  validate(signUserProfileDownloadSchema),
   asyncHandler(StorageController.signUserProfileDownload),
 );
 
@@ -101,17 +66,7 @@ router.post(
   auth,
   requirePermission("storage.sign.upload"),
   requirePermission("student.update"),
-  validate(
-    z.object({
-      body: z.object({
-        studentId: z.string().uuid(),
-        fileName: z.string().min(1),
-        mimeType: z.string().min(3),
-        sizeBytes: z.number().int().positive(),
-        expiresInSeconds: z.number().int().positive().optional(),
-      }),
-    }),
-  ),
+  validate(signStudentProfileUploadSchema),
   asyncHandler(StorageController.signStudentProfileUpload),
 );
 
@@ -119,15 +74,7 @@ router.post(
   "/confirm-upload/student-profile",
   auth,
   requirePermission("student.update"),
-  validate(
-    z.object({
-      body: z.object({
-        studentId: z.string().uuid(),
-        objectKey: z.string().min(10),
-        mimeType: z.string().min(3),
-      }),
-    }),
-  ),
+  validate(confirmStudentProfileUploadSchema),
   asyncHandler(StorageController.confirmStudentProfileUpload),
 );
 
@@ -136,14 +83,7 @@ router.post(
   auth,
   requirePermission("storage.sign.download"),
   requirePermission("student.read"),
-  validate(
-    z.object({
-      body: z.object({
-        studentId: z.string().uuid(),
-        expiresInSeconds: z.number().int().positive().optional(),
-      }),
-    }),
-  ),
+  validate(signStudentProfileDownloadSchema),
   asyncHandler(StorageController.signStudentProfileDownload),
 );
 
