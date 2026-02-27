@@ -9,8 +9,131 @@ import { AuditService } from "./audit.service";
 import { StudentDataService } from "./student.data.service";
 
 const storageService = new StorageService(storageProvider);
+const STUDENT_DOCUMENT_VIEW_EXPIRES_SECONDS = 60 * 60;
 
 export class DocumentService {
+  private static async createSignedUpload(params: {
+    consultancyId: string;
+    payload: {
+      studentId: string;
+      documentTypeKey: string;
+      fileName: string;
+      mimeType: string;
+      sizeBytes: number;
+      requestId?: string;
+      expiresInSeconds?: number;
+    };
+    uploadedByUserId?: string;
+    uploadedByStudentId?: string;
+    actorUserId?: string;
+    auditCtx: { ip?: string; userAgent?: string; requestId?: string };
+  }) {
+    const safeFileName = storageService.validateUploadInput({
+      mimeType: params.payload.mimeType,
+      sizeBytes: params.payload.sizeBytes,
+      fileName: params.payload.fileName,
+    });
+
+    const student = await StudentDataService.findById(
+      params.consultancyId,
+      params.payload.studentId,
+    );
+    if (!student) {
+      throw new AppError(404, "STUDENT_NOT_FOUND", "Student not found");
+    }
+
+    if (params.payload.requestId) {
+      const request = await DocumentRepository.findRequestById(
+        params.consultancyId,
+        params.payload.requestId,
+      );
+      if (!request || request.studentId !== params.payload.studentId) {
+        throw new AppError(400, "INVALID_REQUEST", "Invalid document request for upload");
+      }
+      if (
+        request.status === DocumentRequestStatus.CANCELLED ||
+        request.status === DocumentRequestStatus.FULFILLED
+      ) {
+        throw new AppError(400, "REQUEST_CLOSED", "Document request is not open");
+      }
+    }
+
+    const documentFile = await DocumentRepository.createOrFindDocumentFile(
+      params.consultancyId,
+      params.payload.studentId,
+      params.payload.documentTypeKey,
+    );
+
+    const versionNumber = await DocumentRepository.nextVersionNumber(documentFile.id);
+    const versionId = crypto.randomUUID();
+    const objectKey = storageService.buildDocumentObjectKey({
+      consultancyId: params.consultancyId,
+      studentId: params.payload.studentId,
+      documentTypeKey: params.payload.documentTypeKey,
+      documentVersionId: versionId,
+      fileName: safeFileName,
+    });
+
+    const version = await DocumentRepository.createVersion({
+      id: versionId,
+      consultancyId: params.consultancyId,
+      documentFileId: documentFile.id,
+      uploadedByUserId: params.uploadedByUserId,
+      uploadedByStudentId: params.uploadedByStudentId,
+      requestId: params.payload.requestId,
+      versionNumber,
+      fileName: safeFileName,
+      mimeType: params.payload.mimeType,
+      sizeBytes: BigInt(params.payload.sizeBytes),
+      bucket: env.STORAGE_BUCKET,
+      objectKey,
+    });
+
+    const signed = await storageService.signUpload({
+      bucket: env.STORAGE_BUCKET,
+      objectKey,
+      mimeType: params.payload.mimeType,
+      expiresInSeconds: params.payload.expiresInSeconds,
+    });
+
+    await AuditService.log({
+      consultancyId: params.consultancyId,
+      actorUserId: params.actorUserId,
+      action: "document.version.created",
+      entityType: "DocumentVersion",
+      entityId: version.id,
+      meta: {
+        requestId: params.auditCtx.requestId,
+        studentId: params.payload.studentId,
+        documentTypeKey: params.payload.documentTypeKey,
+      },
+      ip: params.auditCtx.ip,
+      userAgent: params.auditCtx.userAgent,
+    });
+
+    return {
+      documentVersionId: version.id,
+      bucket: env.STORAGE_BUCKET,
+      objectKey,
+      uploadUrl: signed.uploadUrl,
+      expiresInSeconds: signed.expiresInSeconds,
+    };
+  }
+
+  private static async assertDocumentBelongsToStudent(
+    consultancyId: string,
+    studentId: string,
+    documentVersionId: string,
+  ) {
+    const version = await DocumentRepository.findVersionById(
+      consultancyId,
+      documentVersionId,
+    );
+    if (!version || version.documentFile.studentId !== studentId) {
+      throw new AppError(404, "VERSION_NOT_FOUND", "Document version not found");
+    }
+  }
+
   static async createRequest(
     consultancyId: string,
     studentId: string,
@@ -57,6 +180,86 @@ export class DocumentService {
 
   static async listRequests(consultancyId: string, studentId: string) {
     return DocumentRepository.listRequests(consultancyId, studentId);
+  }
+
+  static async listStudentDocuments(consultancyId: string, studentId: string) {
+    const student = await StudentDataService.findById(consultancyId, studentId);
+    if (!student) {
+      throw new AppError(404, "STUDENT_NOT_FOUND", "Student not found");
+    }
+
+    const files = await DocumentRepository.listStudentDocuments(
+      consultancyId,
+      studentId,
+    );
+    const downloadLinkExpiresInSeconds = env.STORAGE_SIGNED_URL_EXPIRES_SECONDS;
+
+    const documents = await Promise.all(
+      files.map(async (file) => {
+        const versions = await Promise.all(
+          file.versions.map(async (version) => {
+            let viewUrl: string | null = null;
+            let downloadUrl: string | null = null;
+
+            if (version.uploadState === DocumentUploadState.CONFIRMED) {
+              const [viewSigned, downloadSigned] = await Promise.all([
+                storageService.signDownload({
+                  bucket: version.bucket,
+                  objectKey: version.objectKey,
+                  expiresInSeconds: STUDENT_DOCUMENT_VIEW_EXPIRES_SECONDS,
+                }),
+                storageService.signDownload({
+                  bucket: version.bucket,
+                  objectKey: version.objectKey,
+                  expiresInSeconds: downloadLinkExpiresInSeconds,
+                }),
+              ]);
+
+              viewUrl = viewSigned.downloadUrl;
+              downloadUrl = downloadSigned.downloadUrl;
+            }
+
+            return {
+              id: version.id,
+              versionNumber: version.versionNumber,
+              fileName: version.fileName,
+              mimeType: version.mimeType,
+              sizeBytes: version.sizeBytes,
+              uploadState: version.uploadState,
+              createdAt: version.createdAt,
+              isCurrent: file.currentVersionId === version.id,
+              request: version.request,
+              verification: version.verifications[0] ?? null,
+              viewUrl,
+              downloadUrl,
+            };
+          }),
+        );
+
+        return {
+          documentTypeKey: file.documentTypeKey,
+          documentFileId: file.id,
+          currentVersionId: file.currentVersionId,
+          createdAt: file.createdAt,
+          updatedAt: file.updatedAt,
+          versions,
+        };
+      }),
+    );
+
+    return {
+      student: {
+        id: student.id,
+        fullName: student.fullName,
+        email: student.email,
+        phone: student.phone,
+      },
+      linkExpiry: {
+        viewUrlExpiresInSeconds: STUDENT_DOCUMENT_VIEW_EXPIRES_SECONDS,
+        downloadUrlExpiresInSeconds: downloadLinkExpiresInSeconds,
+      },
+      documents,
+    };
   }
 
   static async updateRequest(
@@ -135,89 +338,36 @@ export class DocumentService {
     },
     auditCtx: { ip?: string; userAgent?: string; requestId?: string },
   ) {
-    const safeFileName = storageService.validateUploadInput({
-      mimeType: payload.mimeType,
-      sizeBytes: payload.sizeBytes,
-      fileName: payload.fileName,
-    });
-
-    const student = await StudentDataService.findById(consultancyId, payload.studentId);
-    if (!student) {
-      throw new AppError(404, "STUDENT_NOT_FOUND", "Student not found");
-    }
-
-    if (payload.requestId) {
-      const request = await DocumentRepository.findRequestById(consultancyId, payload.requestId);
-      if (!request || request.studentId !== payload.studentId) {
-        throw new AppError(400, "INVALID_REQUEST", "Invalid document request for upload");
-      }
-      if (
-        request.status === DocumentRequestStatus.CANCELLED ||
-        request.status === DocumentRequestStatus.FULFILLED
-      ) {
-        throw new AppError(400, "REQUEST_CLOSED", "Document request is not open");
-      }
-    }
-
-    const documentFile = await DocumentRepository.createOrFindDocumentFile(
+    return this.createSignedUpload({
       consultancyId,
-      payload.studentId,
-      payload.documentTypeKey,
-    );
-
-    const versionNumber = await DocumentRepository.nextVersionNumber(documentFile.id);
-    const versionId = crypto.randomUUID();
-    const objectKey = storageService.buildDocumentObjectKey({
-      consultancyId,
-      studentId: payload.studentId,
-      documentTypeKey: payload.documentTypeKey,
-      documentVersionId: versionId,
-      fileName: safeFileName,
-    });
-
-    const version = await DocumentRepository.createVersion({
-      id: versionId,
-      consultancyId,
-      documentFileId: documentFile.id,
-      uploadedByUserId: actorUserId,
-      requestId: payload.requestId,
-      versionNumber,
-      fileName: safeFileName,
-      mimeType: payload.mimeType,
-      sizeBytes: BigInt(payload.sizeBytes),
-      bucket: env.STORAGE_BUCKET,
-      objectKey,
-    });
-
-    const signed = await storageService.signUpload({
-      bucket: env.STORAGE_BUCKET,
-      objectKey,
-      mimeType: payload.mimeType,
-      expiresInSeconds: payload.expiresInSeconds,
-    });
-
-    await AuditService.log({
-      consultancyId,
+      payload,
       actorUserId,
-      action: "document.version.created",
-      entityType: "DocumentVersion",
-      entityId: version.id,
-      meta: {
-        requestId: auditCtx.requestId,
-        studentId: payload.studentId,
-        documentTypeKey: payload.documentTypeKey,
-      },
-      ip: auditCtx.ip,
-      userAgent: auditCtx.userAgent,
+      uploadedByUserId: actorUserId,
+      auditCtx,
     });
+  }
 
-    return {
-      documentVersionId: version.id,
-      bucket: env.STORAGE_BUCKET,
-      objectKey,
-      uploadUrl: signed.uploadUrl,
-      expiresInSeconds: signed.expiresInSeconds,
-    };
+  static async signUploadForStudentPortal(
+    consultancyId: string,
+    studentId: string,
+    actorUserId: string,
+    payload: {
+      documentTypeKey: string;
+      fileName: string;
+      mimeType: string;
+      sizeBytes: number;
+      requestId?: string;
+      expiresInSeconds?: number;
+    },
+    auditCtx: { ip?: string; userAgent?: string; requestId?: string },
+  ) {
+    return this.createSignedUpload({
+      consultancyId,
+      payload: { ...payload, studentId },
+      actorUserId,
+      uploadedByStudentId: studentId,
+      auditCtx,
+    });
   }
 
   static async confirmUpload(
@@ -289,6 +439,40 @@ export class DocumentService {
       downloadUrl: signed.downloadUrl,
       expiresInSeconds: signed.expiresInSeconds,
     };
+  }
+
+  static async confirmUploadForStudentPortal(
+    consultancyId: string,
+    studentId: string,
+    documentVersionId: string,
+    actorUserId: string,
+    auditCtx: { ip?: string; userAgent?: string; requestId?: string },
+  ) {
+    await this.assertDocumentBelongsToStudent(
+      consultancyId,
+      studentId,
+      documentVersionId,
+    );
+    return this.confirmUpload(
+      consultancyId,
+      documentVersionId,
+      actorUserId,
+      auditCtx,
+    );
+  }
+
+  static async signDownloadForStudentPortal(
+    consultancyId: string,
+    studentId: string,
+    documentVersionId: string,
+    expiresInSeconds?: number,
+  ) {
+    await this.assertDocumentBelongsToStudent(
+      consultancyId,
+      studentId,
+      documentVersionId,
+    );
+    return this.signDownload(consultancyId, documentVersionId, expiresInSeconds);
   }
 
   static async verifyDocument(

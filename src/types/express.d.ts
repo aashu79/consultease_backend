@@ -17,6 +17,9 @@ declare global {
         phoneVerified: boolean;
         sessionId: string;
       };
+      studentPortal?: {
+        studentId: string;
+      };
     }
   }
 }

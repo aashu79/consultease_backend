@@ -10,6 +10,7 @@ import {
   confirmDocumentUploadSchema,
   createDocumentRequestSchema,
   listDocumentRequestsSchema,
+  listStudentDocumentsSchema,
   updateDocumentRequestSchema,
   verifyDocumentSchema,
 } from "../validations/document.validation";
@@ -30,6 +31,14 @@ router.get(
   requirePermission("doc.request.read"),
   validate(listDocumentRequestsSchema),
   asyncHandler(DocumentController.listRequests),
+);
+
+router.get(
+  "/students/:studentId/documents",
+  auth,
+  requirePermission("doc.read"),
+  validate(listStudentDocumentsSchema),
+  asyncHandler(DocumentController.listDocuments),
 );
 
 router.patch(

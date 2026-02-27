@@ -19,6 +19,14 @@ export class DocumentController {
     return successResponse(res, data);
   }
 
+  static async listDocuments(req: Request, res: Response) {
+    const data = await DocumentService.listStudentDocuments(
+      req.tenant!.consultancyId,
+      req.params.studentId,
+    );
+    return successResponse(res, data);
+  }
+
   static async updateRequest(req: Request, res: Response) {
     const data = await DocumentService.updateRequest(
       req.tenant!.consultancyId,

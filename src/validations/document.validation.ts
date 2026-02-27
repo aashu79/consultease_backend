@@ -16,6 +16,10 @@ export const listDocumentRequestsSchema = z.object({
   params: z.object({ studentId: z.string().uuid() }),
 });
 
+export const listStudentDocumentsSchema = z.object({
+  params: z.object({ studentId: z.string().uuid() }),
+});
+
 export const updateDocumentRequestSchema = z.object({
   params: z.object({ id: z.string().uuid() }),
   body: z.object({

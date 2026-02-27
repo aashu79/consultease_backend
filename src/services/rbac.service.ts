@@ -8,6 +8,13 @@ import {
 import { AppError } from "../utils/errors";
 import { RbacRepository } from "../repositories/rbac.repository";
 
+const STUDENT_PORTAL_ROLE_KEY = "STUDENT_PORTAL";
+
+type ExtendedTransactionClient = Omit<
+  typeof prisma,
+  "$connect" | "$disconnect" | "$on" | "$transaction" | "$use" | "$extends"
+>;
+
 export class RbacService {
   static async seedGlobalPermissions() {
     await prisma.$transaction(
@@ -29,7 +36,7 @@ export class RbacService {
   }
 
   static async seedTenantDefaults(
-    tx: Prisma.TransactionClient,
+    tx: ExtendedTransactionClient,
     consultancyId: string,
     ownerUserId: string,
   ) {
@@ -208,5 +215,41 @@ export class RbacService {
       roles,
       permissions: Array.from(permissionSet),
     };
+  }
+
+  static async ensureStudentPortalRoleAssignment(
+    consultancyId: string,
+    userId: string,
+  ) {
+    const linkedStudent = await prisma.student.findFirst({
+      where: { consultancyId, portalUserId: userId },
+      select: { id: true },
+    });
+    if (!linkedStudent) {
+      return false;
+    }
+
+    const role = await prisma.role.upsert({
+      where: {
+        consultancyId_key: {
+          consultancyId,
+          key: STUDENT_PORTAL_ROLE_KEY,
+        },
+      },
+      update: {},
+      create: {
+        consultancyId,
+        key: STUDENT_PORTAL_ROLE_KEY,
+        name: DEFAULT_ROLE_NAMES[STUDENT_PORTAL_ROLE_KEY] ?? "Student Portal",
+        isSystem: true,
+      },
+    });
+
+    await prisma.userRole.createMany({
+      data: [{ consultancyId, userId, roleId: role.id }],
+      skipDuplicates: true,
+    });
+
+    return true;
   }
 }

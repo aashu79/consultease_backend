@@ -453,10 +453,19 @@ export class AuthService {
       refreshTokenHash: await hashValue(refreshToken),
     });
 
-    const authz = await RbacService.getUserAuthorization(
+    let authz = await RbacService.getUserAuthorization(
       consultancy.id,
       user.id,
     );
+    if (authz.roles.length === 0) {
+      const assigned = await RbacService.ensureStudentPortalRoleAssignment(
+        consultancy.id,
+        user.id,
+      );
+      if (assigned) {
+        authz = await RbacService.getUserAuthorization(consultancy.id, user.id);
+      }
+    }
 
     return {
       accessToken,

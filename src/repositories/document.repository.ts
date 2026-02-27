@@ -31,6 +31,34 @@ export class DocumentRepository {
     return prisma.documentRequest.findFirst({ where: { id: requestId, consultancyId } });
   }
 
+  static listStudentDocuments(consultancyId: string, studentId: string) {
+    return prisma.documentFile.findMany({
+      where: { consultancyId, studentId },
+      orderBy: [{ documentTypeKey: "asc" }, { updatedAt: "desc" }],
+      include: {
+        currentVersion: {
+          include: {
+            verifications: { orderBy: { createdAt: "desc" }, take: 1 },
+          },
+        },
+        versions: {
+          orderBy: [{ versionNumber: "desc" }, { createdAt: "desc" }],
+          include: {
+            request: {
+              select: {
+                id: true,
+                title: true,
+                status: true,
+                dueAt: true,
+              },
+            },
+            verifications: { orderBy: { createdAt: "desc" }, take: 1 },
+          },
+        },
+      },
+    });
+  }
+
   static updateRequest(consultancyId: string, requestId: string, data: Prisma.DocumentRequestUpdateInput) {
     return prisma.documentRequest.updateMany({ where: { id: requestId, consultancyId }, data });
   }

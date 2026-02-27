@@ -46,6 +46,7 @@ export const PERMISSION_KEYS = [
 
 export const DEFAULT_ROLE_PERMISSION_KEYS: Record<string, string[]> = {
   SUPER_ADMIN: [...PERMISSION_KEYS],
+  STUDENT_PORTAL: [],
   COUNSELOR: [
     "lead.create",
     "lead.read",
@@ -93,6 +94,7 @@ export const DEFAULT_ROLE_PERMISSION_KEYS: Record<string, string[]> = {
 
 export const DEFAULT_ROLE_NAMES: Record<string, string> = {
   SUPER_ADMIN: "Super Admin",
+  STUDENT_PORTAL: "Student Portal",
   COUNSELOR: "Counselor",
   DOCUMENTATION_OFFICER: "Documentation Officer",
   VISA_OFFICER: "Visa Officer",

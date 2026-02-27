@@ -9,6 +9,13 @@ import { AppError } from "./utils/errors";
 
 export const app = express();
 
+app.set("json replacer", (_key: string, value: unknown) => {
+  if (typeof value === "bigint") {
+    return value.toString();
+  }
+  return value;
+});
+
 app.use(cors());
 app.use(express.json({ limit: "5mb" }));
 app.use(express.urlencoded({ extended: true }));
